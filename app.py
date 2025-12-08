@@ -5,16 +5,16 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定 (直接隱藏側邊欄)
+# 頁面設定
 # ==========================
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# V35 CSS：純淨版面 + 手機圖表優化
+# CSS：強制介面修復 (輸入框顯色 + 3D圖滿版)
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定 */
+    /* 1. 全域設定：強制白底黑字 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -32,13 +32,25 @@ st.markdown("""
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
 
-    /* 4. 輸入框優化 */
-    div[data-baseweb="input"] input,
-    div[data-baseweb="select"] div,
+    /* === 4. 輸入框顯示修復 (關鍵修正) === */
+    /* 強制輸入框背景為白色，文字為黑色，邊框為深灰色 */
+    input[type="text"], input[type="number"] {
+        color: #000000 !important;
+        background-color: #ffffff !important;
+        border: 1px solid #999999 !important;
+        -webkit-text-fill-color: #000000 !important; /* 確保 Safari/iOS 也是黑色 */
+    }
+    
+    /* 修正輸入框容器樣式 */
+    div[data-baseweb="input"], div[data-baseweb="select"] {
+        background-color: #ffffff !important;
+        border-color: #999999 !important;
+    }
+    
+    /* 修正表格內的文字顏色 */
     .stDataFrame, .stTable {
         color: #000000 !important;
-        background-color: #f9f9f9 !important;
-        border-color: #cccccc !important;
+        background-color: #ffffff !important;
     }
     
     /* 5. 區塊標題優化 */
@@ -71,11 +83,10 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    /* 8. 針對手機調整頂部與左右邊距 */
+    /* 8. 調整頂部間距 */
     .block-container {
         padding-top: 2rem !important;
-        /* 極大化手機寬度利用，減少留白 */
-        padding-left: 0.5rem !important; 
+        padding-left: 0.5rem !important;
         padding-right: 0.5rem !important;
     }
 </style>
@@ -192,7 +203,7 @@ if run_button:
             tickfont=dict(color="#000000", size=12) 
         )
         
-        # === V35 關鍵修改：針對手機的 3D 圖表滿版優化 ===
+        # === 3D 圖表修正區塊 ===
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
@@ -203,9 +214,8 @@ if run_button:
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            # ★★★ 關鍵：將左右邊距 (l, r) 設為 0 ★★★
-            # 這樣圖表就會直接貼齊手機螢幕邊緣，不會被留白擠壓
-            margin=dict(t=20, b=20, l=0, r=0), 
+            # ★★★ 關鍵修正：邊距徹底歸零 ★★★
+            margin=dict(t=0, b=0, l=0, r=0), 
             height=500 
         )
 
