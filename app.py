@@ -10,7 +10,7 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：強制介面修復
+# CSS：強制介面修復與樣式調整
 # ==========================
 st.markdown("""
 <style>
@@ -52,7 +52,7 @@ st.markdown("""
         padding-left: 10px;
     }
 
-    /* 6. 報表卡片樣式 */
+    /* 6. 報表卡片樣式 (用於詳細表格) */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -61,7 +61,7 @@ st.markdown("""
         background: #ffffff; 
         color: #333333; 
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
+        margin-top: 20px;
     }
     
     /* 7. 圖表樣式 */
@@ -76,6 +76,35 @@ st.markdown("""
         padding-top: 2rem !important;
         padding-left: 0.5rem !important;
         padding-right: 0.5rem !important;
+    }
+
+    /* 9. 自定義狀態條樣式 */
+    .status-bar-success {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 15px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 1.2rem;
+        border: 1px solid #c3e6cb;
+        margin-bottom: 10px;
+    }
+    .status-bar-fail {
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 15px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 1.2rem;
+        border: 1px solid #f5c6cb;
+        margin-bottom: 10px;
+    }
+    .util-text {
+        font-size: 1.1rem;
+        font-weight: bold;
+        margin-bottom: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -177,9 +206,11 @@ if run_button:
 
         packer.pack(bigger_first=True)
         
+        # -----------------------------
+        # 繪圖邏輯
+        # -----------------------------
         fig = go.Figure()
         
-        # 1. 座標軸樣式 (強制黑色)
         axis_config = dict(
             backgroundcolor="white",
             showbackground=True,
@@ -193,8 +224,8 @@ if run_button:
         )
         
         fig.update_layout(
-            template="plotly_white", # 強制白底
-            font=dict(color="black"), # 全局黑色字體 (解決文字看不到)
+            template="plotly_white",
+            font=dict(color="black"),
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             autosize=True, 
@@ -205,13 +236,13 @@ if run_button:
                 aspectmode='data'
             ),
             margin=dict(t=0, b=0, l=0, r=0), 
-            height=500,
-            # 2. 關鍵修正：強制圖例文字顏色為黑色，並給一個半透明白底
+            height=500, # 可以調整高度
             legend=dict(
                 font=dict(color="black", size=13),
                 bgcolor="rgba(255,255,255,0.8)",
                 bordercolor="#000000",
-                borderwidth=1
+                borderwidth=1,
+                x=0, y=1 # 強制 Legend 在左上角
             )
         )
 
@@ -238,7 +269,6 @@ if run_button:
                 total_net_weight += i_weight
                 
                 color = product_colors.get(item.name, '#888')
-                # 提示文字
                 hover_text = f"{item.name}<br>實際佔用: {idim_w}x{idim_d}x{idim_h}<br>重量: {i_weight:.2f}kg<br>位置:({x},{y},{z})"
                 
                 fig.add_trace(go.Mesh3d(
@@ -263,6 +293,9 @@ if run_button:
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
         
+        # -----------------------------
+        # 數據計算
+        # -----------------------------
         box_vol = box_l * box_w * box_h
         utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
@@ -280,27 +313,39 @@ if run_button:
                 diff = req_qty - real_qty
                 missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
 
-        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
+        # -----------------------------
+        # 準備顯示內容 HTML (拆分為不同區塊以靈活排版)
+        # -----------------------------
+        
+        # 1. 狀態條顯示
+        if all_fitted:
+            status_div = '<div class="status-bar-success">✅ 完美！所有商品皆已裝入。</div>'
+        else:
+            status_div = f'<div class="status-bar-fail">❌ 注意：有部分商品裝不下！</div><ul style="padding-left: 20px;">{missing_items_html}</ul>'
 
-        report_html = f"""
-        <div class="report-card">
-            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
-            <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
-                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
+        # 2. 詳細表格 HTML (移到底部用)
+        table_html = f"""
+            <table style="border-collapse: collapse; margin-bottom: 0px; width: 100%; font-size: 1.0em;">
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 10px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 10px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str}</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 10px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 10px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 10px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold;">{gross_weight:.2f} kg</td></tr>
+                <tr><td style="padding: 10px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
             </table>
-            {status_html}
-        </div>
         """
 
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        st.markdown(report_html, unsafe_allow_html=True)
+        # 3. 完整下載用 HTML (保持原樣，方便存檔)
+        full_report_html_for_download = f"""
+        <div class="report-card">
+            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
+            {table_html}
+            <br>
+            {status_div}
+        </div>
+        """
         
-        full_html_content = f"""
+        full_file_content = f"""
         <html>
         <head>
             <title>裝箱報告 - {order_name}</title>
@@ -308,7 +353,7 @@ if run_button:
         </head>
         <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
             <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                {report_html.replace('class="report-card"', '')}
+                {full_report_html_for_download.replace('class="report-card"', '')}
                 <div style="margin-top: 30px;">
                     <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
                     {fig.to_html(include_plotlyjs='cdn', full_html=False)}
@@ -319,15 +364,31 @@ if run_button:
         """
         
         file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
+
+        # ==========================
+        # 畫面輸出順序調整 (符合截圖：字 -> 狀態 -> 按鈕 -> 3D圖)
+        # ==========================
         
+        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+
+        # 1. 顯示利用率 (最上方)
+        st.markdown(f'<div class="util-text">📊 空間利用率: {utilization:.2f}%</div>', unsafe_allow_html=True)
+        
+        # 2. 顯示狀態條 (綠色或紅色區塊)
+        st.markdown(status_div, unsafe_allow_html=True)
+
+        # 3. 下載按鈕 (紅色)
         st.download_button(
             label="📥 下載完整裝箱報告 (.html)",
-            data=full_html_content,
+            data=full_file_content,
             file_name=file_name,
             mime="text/html",
             type="primary"
         )
 
-        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
-        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
+        # 4. 3D 圖表 (直接在按鈕下方)
         st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
+
+        # 5. 詳細表格 (放在最下面，避免喧賓奪主)
+        with st.expander("📄 查看詳細數據表格", expanded=True):
+             st.markdown(f'<div class="report-card" style="margin-top:0;">{table_html}</div>', unsafe_allow_html=True)
