@@ -10,11 +10,11 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：維持您提供的純淨版面配置
+# CSS：強制介面修復
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定：白底黑字 */
+    /* 1. 全域設定：強制白底黑字 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -64,13 +64,12 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 7. 圖表樣式 - 強制覆蓋 */
+    /* 7. 圖表樣式 */
     .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
     .xtick text, .ytick text, .ztick text {
         fill: #000000 !important;
         font-weight: bold !important;
     }
-    g.pointtext { fill: #000000 !important; }
     
     /* 8. 調整頂部間距 */
     .block-container {
@@ -132,9 +131,6 @@ with col_right:
 
 st.markdown("---")
 
-# ==========================
-# 中間：執行按鈕
-# ==========================
 b1, b2, b3 = st.columns([1, 2, 1])
 with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
@@ -183,7 +179,7 @@ if run_button:
         
         fig = go.Figure()
         
-        # === V38 關鍵修正：定義全黑座標軸樣式 ===
+        # 1. 座標軸樣式 (強制黑色)
         axis_config = dict(
             backgroundcolor="white",
             showbackground=True,
@@ -192,15 +188,13 @@ if run_button:
             linecolor="#000000",
             showgrid=True,
             showline=True,
-            # 強制刻度數字為黑色
-            tickfont=dict(color="black", size=11, family="Arial"),
-            # 強制標題文字為黑色
-            title_font=dict(color="black", size=14, family="Arial Black")
+            tickfont=dict(color="black", size=12, family="Arial Black"),
+            title=dict(font=dict(color="black", size=14, family="Arial Black"))
         )
         
         fig.update_layout(
-            template="plotly_white", # 強制使用白底模板
-            font=dict(color="black"), # 強制全圖文字為黑色 (包含圖例)
+            template="plotly_white", # 強制白底
+            font=dict(color="black"), # 全局黑色字體 (解決文字看不到)
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             autosize=True, 
@@ -212,13 +206,15 @@ if run_button:
             ),
             margin=dict(t=0, b=0, l=0, r=0), 
             height=500,
+            # 2. 關鍵修正：強制圖例文字顏色為黑色，並給一個半透明白底
             legend=dict(
-                font=dict(color="black"), # 確保圖例文字是黑色
-                bgcolor="rgba(255,255,255,0.8)" # 圖例背景半透明白
+                font=dict(color="black", size=13),
+                bgcolor="rgba(255,255,255,0.8)",
+                bordercolor="#000000",
+                borderwidth=1
             )
         )
 
-        # 畫外箱 (加粗黑線)
         fig.add_trace(go.Scatter3d(
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
@@ -242,6 +238,7 @@ if run_button:
                 total_net_weight += i_weight
                 
                 color = product_colors.get(item.name, '#888')
+                # 提示文字
                 hover_text = f"{item.name}<br>實際佔用: {idim_w}x{idim_d}x{idim_h}<br>重量: {i_weight:.2f}kg<br>位置:({x},{y},{z})"
                 
                 fig.add_trace(go.Mesh3d(
@@ -331,4 +328,6 @@ if run_button:
             type="primary"
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
+        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
+        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
