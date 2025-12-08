@@ -5,11 +5,11 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定與 CSS 強制優化 (純淨版)
+# 頁面設定與 CSS 強制優化
 # ==========================
-st.set_page_config(layout="wide", page_title="3D 智能裝箱系統")
+st.set_page_config(layout="wide", page_title="3D智能裝箱系統")
 
-# V19 CSS 注入：隱藏所有 Streamlit 官方標記
+# V20 CSS 修正：只隱藏雜訊，保留側邊欄開關按鈕
 st.markdown("""
 <style>
     /* 1. 強制背景白、文字黑 */
@@ -24,14 +24,36 @@ st.markdown("""
         background-color: #ffffff !important;
     }
     
-    /* 2. 隱藏 Streamlit 官方元素 (關鍵修改) */
-    #MainMenu {visibility: hidden;} /* 隱藏右上角漢堡選單 */
-    footer {visibility: hidden;}    /* 隱藏頁尾 Made with Streamlit */
-    header {visibility: hidden;}    /* 隱藏頂部標題列 */
-    [data-testid="stToolbar"] {display: none !important;} /* 隱藏工具列 */
-    [data-testid="stDecoration"] {display: none !important;} /* 隱藏頂部彩條 */
-    [data-testid="stStatusWidget"] {display: none !important;} /* 隱藏連線狀態 */
-    .stDeployButton {display:none;} /* 隱藏 Deploy 按鈕 */
+    /* 2. 精準隱藏 Streamlit 官方元素 (修正版) */
+    
+    /* 隱藏頂部彩虹條 */
+    [data-testid="stDecoration"] {
+        display: none;
+    }
+    
+    /* 隱藏右下角 Manage app 按鈕 */
+    .stDeployButton {
+        display: none;
+    }
+    
+    /* 隱藏頁尾 Made with Streamlit */
+    footer {
+        visibility: hidden;
+    }
+    
+    /* 隱藏右上角的漢堡選單 (三個點)，但保留左邊的側邊欄開關 */
+    [data-testid="stToolbar"] {
+        visibility: hidden;
+    }
+    
+    /* === 關鍵修正 === */
+    /* 確保側邊欄的「展開箭頭 (>)" 是可見的，並且是黑色的 */
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: block !important;
+        color: #000000 !important;
+        background-color: transparent !important;
+    }
     
     /* 3. 報表卡片樣式 */
     .report-card {
@@ -54,14 +76,14 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    /* 5. 調整頂部間距 (因為隱藏了 header，把內容往上推) */
+    /* 5. 調整頂部間距 */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 2rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V19)")
+st.title("📦 3D智能裝箱系統")
 st.markdown("---")
 
 # ==========================
@@ -116,7 +138,7 @@ edited_df = st.data_editor(
 # 運算邏輯
 # ==========================
 if run_button:
-    with st.spinner('正在進行 3D 運算...'):
+    with st.spinner('正在進行 3D 運算 (已啟用空間最大化演算法)...'):
         # 準備數據
         max_weight_limit = 999999
         packer = Packer()
@@ -247,3 +269,62 @@ if run_button:
         # 檢查
         all_fitted = True
         missing_items_html = ""
+        for name, req_qty in requested_counts.items():
+            real_qty = packed_counts.get(name, 0)
+            if real_qty < req_qty:
+                all_fitted = False
+                diff = req_qty - real_qty
+                missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
+
+        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
+
+        # 生成報告
+        report_html = f"""
+        <div class="report-card">
+            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
+            <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
+                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
+            </table>
+            {status_html}
+        </div>
+        """
+
+        # 顯示區域
+        st.header("📊 3. 裝箱結果")
+        st.markdown(report_html, unsafe_allow_html=True)
+        
+        # 下載按鈕
+        full_html_content = f"""
+        <html>
+        <head>
+            <title>裝箱報告 - {order_name}</title>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
+            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                {report_html.replace('class="report-card"', '')}
+                <div style="margin-top: 30px;">
+                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
+                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
+        
+        st.download_button(
+            label="📥 下載完整裝箱報告 (.html)",
+            data=full_html_content,
+            file_name=file_name,
+            mime="text/html",
+            type="primary"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
