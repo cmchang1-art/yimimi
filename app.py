@@ -98,9 +98,9 @@ with col_left:
         
         st.caption("外箱尺寸 (cm)")
         c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=45.0, step=1.0)
-        box_w = c2.number_input("寬", value=30.0, step=1.0)
-        box_h = c3.number_input("高", value=30.0, step=1.0)
+        box_l = c1.number_input("長", value=35.0, step=1.0)
+        box_w = c2.number_input("寬", value=25.0, step=1.0)
+        box_h = c3.number_input("高", value=20.0, step=1.0)
         
         box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
@@ -110,8 +110,8 @@ with col_right:
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame(
             [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
-                {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
+                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5},
+                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5},
             ]
         )
 
