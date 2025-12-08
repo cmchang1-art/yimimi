@@ -1,0 +1,190 @@
+import streamlit as st
+import pandas as pd
+from py3dbp import Packer, Bin, Item
+import plotly.graph_objects as go
+import datetime
+
+# 設定網頁標題與寬度
+st.set_page_config(layout="wide", page_title="3D 智能裝箱系統")
+
+# 標題
+st.title("📦 3D 智能裝箱系統 (WordPress 版)")
+st.markdown("---")
+
+# ==========================
+# 側邊欄：設定區
+# ==========================
+with st.sidebar:
+    st.header("📝 1. 訂單與外箱設定")
+    
+    order_name = st.text_input("訂單名稱", value="訂單_2024001")
+    
+    st.subheader("外箱規格")
+    col1, col2, col3 = st.columns(3)
+    box_l = col1.number_input("長 (cm)", value=45.0, step=1.0)
+    box_w = col2.number_input("寬 (cm)", value=30.0, step=1.0)
+    box_h = col3.number_input("高 (cm)", value=30.0, step=1.0)
+    
+    box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
+    
+    st.markdown("---")
+    st.info("💡 修改下方商品清單後，請點擊執行按鈕。")
+    run_button = st.button("🔄 執行裝箱運算", type="primary")
+
+# ==========================
+# 主畫面：商品清單
+# ==========================
+st.header("🎁 2. 商品清單 (可直接編輯)")
+
+# 預設數據
+default_data = pd.DataFrame(
+    [
+        {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
+        {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
+    ]
+)
+
+# 可編輯表格
+edited_df = st.data_editor(
+    default_data,
+    num_rows="dynamic",
+    use_container_width=True,
+    column_config={
+        "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
+        "長": st.column_config.NumberColumn(format="%.1f"),
+        "寬": st.column_config.NumberColumn(format="%.1f"),
+        "高": st.column_config.NumberColumn(format="%.1f"),
+        "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
+    }
+)
+
+# ==========================
+# 運算邏輯
+# ==========================
+if run_button:
+    with st.spinner('正在進行 3D 運算...'):
+        # 準備數據
+        max_weight_limit = 999999
+        packer = Packer()
+        packer.add_bin(Bin('StandardBox', box_l, box_w, box_h, max_weight_limit))
+        
+        requested_counts = {}
+        unique_products = []
+        total_qty = 0
+        total_net_weight = 0
+        
+        # 讀取表格數據
+        for index, row in edited_df.iterrows():
+            try:
+                name = str(row["商品名稱"])
+                l = float(row["長"])
+                w = float(row["寬"])
+                h = float(row["高"])
+                weight = float(row["重量(kg)"])
+                qty = int(row["數量"])
+                
+                if qty > 0:
+                    total_qty += qty
+                    if name not in requested_counts:
+                        requested_counts[name] = 0
+                        unique_products.append(name)
+                    requested_counts[name] += qty
+                    
+                    for _ in range(qty):
+                        packer.add_item(Item(name, l, w, h, weight))
+            except:
+                pass # 忽略空行或錯誤數據
+
+        # 顏色分配
+        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB']
+        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+
+        # 開始計算
+        packer.pack()
+        
+        # 準備繪圖
+        fig = go.Figure()
+        
+        # 畫外箱
+        fig.add_trace(go.Scatter3d(
+            x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
+            y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
+            z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
+            mode='lines', line=dict(color='blue', width=5), name='外箱'
+        ))
+
+        total_vol = 0
+        packed_counts = {}
+        
+        # 畫商品
+        for b in packer.bins:
+            for item in b.items:
+                packed_counts[item.name] = packed_counts.get(item.name, 0) + 1
+                
+                x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
+                dim = item.get_dimension()
+                idim_w, idim_d, idim_h = float(dim[0]), float(dim[1]), float(dim[2])
+                i_weight = float(item.weight)
+                
+                total_vol += (idim_w * idim_d * idim_h)
+                total_net_weight += i_weight
+                
+                color = product_colors.get(item.name, '#888')
+                hover_text = f"{item.name}<br>{idim_w}x{idim_d}x{idim_h}<br>{i_weight}kg"
+                
+                fig.add_trace(go.Mesh3d(
+                    x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
+                    y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
+                    z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
+                    i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                    j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                    k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                    color=color, opacity=1, name=item.name, showlegend=True,
+                    text=hover_text, hoverinfo='text'
+                ))
+                fig.add_trace(go.Scatter3d(
+                    x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
+                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
+                    z=[z, z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z, z+idim_h, z+idim_h, z+idim_h, z, z],
+                    mode='lines', line=dict(color='black', width=3), showlegend=False
+                ))
+
+        # 整理圖表
+        names = set()
+        fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
+        fig.update_layout(scene=dict(xaxis_title='L', yaxis_title='W', zaxis_title='H', aspectmode='data'), margin=dict(t=0, b=0, l=0, r=0), height=500)
+
+        # 統計數據
+        box_vol = box_l * box_w * box_h
+        utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
+        gross_weight = total_net_weight + box_weight
+        
+        # 台灣時間
+        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        now_str = tw_time.strftime("%Y-%m-%d %H:%M")
+
+        # ==========================
+        # 顯示報告
+        # ==========================
+        st.header("📊 3. 裝箱結果")
+        
+        # 顯示重點指標
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("空間利用率", f"{utilization:.2f}%")
+        m2.metric("內容淨重", f"{total_net_weight:.2f} kg")
+        m3.metric("本箱總重", f"{gross_weight:.2f} kg")
+        m4.metric("計算時間", now_str)
+        
+        # 檢查裝箱狀況
+        all_fitted = True
+        for name, req_qty in requested_counts.items():
+            real_qty = packed_counts.get(name, 0)
+            if real_qty < req_qty:
+                all_fitted = False
+                st.error(f"⚠️ {name}: 裝不下 {req_qty - real_qty} 個 (需求 {req_qty} / 實裝 {real_qty})")
+        
+        if all_fitted:
+            st.success("✅ 完美！所有商品皆已裝入。")
+            
+        # 顯示 3D 圖
+        st.plotly_chart(fig, use_container_width=True)
