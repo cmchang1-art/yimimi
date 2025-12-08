@@ -5,26 +5,24 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定 (修改標題)
+# 頁面設定
 # ==========================
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# V31 CSS：純淨版面
+# V32 CSS：垂直佈局優化
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定：白底黑字 */
+    /* 1. 全域設定 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
     }
     
-    /* 2. 徹底隱藏側邊欄與相關按鈕 */
+    /* 2. 徹底隱藏側邊欄與雜訊 */
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="stSidebarCollapsedControl"] { display: none !important; }
-    
-    /* 3. 隱藏官方雜訊 */
     [data-testid="stDecoration"] { display: none !important; }
     .stDeployButton { display: none !important; }
     footer { display: none !important; }
@@ -32,7 +30,7 @@ st.markdown("""
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
 
-    /* 4. 輸入框優化 */
+    /* 3. 輸入框優化 */
     div[data-baseweb="input"] input,
     div[data-baseweb="select"] div,
     .stDataFrame, .stTable {
@@ -41,21 +39,25 @@ st.markdown("""
         border-color: #cccccc !important;
     }
     
-    /* 5. 區塊標題優化 */
+    /* 4. 區塊標題 (加大間距，讓垂直排列分明) */
     .section-header {
-        font-size: 1.2rem;
+        font-size: 1.3rem;
         font-weight: bold;
         color: #333;
-        margin-top: 10px;
-        margin-bottom: 5px;
-        border-left: 5px solid #FF4B4B;
-        padding-left: 10px;
+        margin-top: 20px;
+        margin-bottom: 10px;
+        border-left: 6px solid #FF4B4B;
+        padding-left: 12px;
+        background-color: #f0f2f6;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        border-radius: 0 5px 5px 0;
     }
 
-    /* 6. 報表卡片樣式 */
+    /* 5. 報表卡片 */
     .report-card {
-        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
-        padding: 20px; 
+        font-family: sans-serif; 
+        padding: 15px; 
         border: 2px solid #e0e0e0; 
         border-radius: 10px; 
         background: #ffffff; 
@@ -64,82 +66,82 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 7. 圖表樣式 */
+    /* 6. 圖表樣式 */
     .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
     .xtick text, .ytick text, .ztick text {
         fill: #000000 !important;
         font-weight: bold !important;
     }
     
-    /* 8. 調整頂部間距 */
+    /* 7. 調整頂部間距 */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 1rem !important;
+        padding-bottom: 5rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# 修改標題
 st.title("📦 3D裝箱系統")
-st.markdown("---")
 
 # ==========================
-# 上半部：輸入區域
+# 區塊 1：訂單與外箱 (垂直排列)
 # ==========================
+st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
 
-col_left, col_right = st.columns([1, 2], gap="large")
+# 訂單名稱獨立一行
+order_name = st.text_input("訂單名稱", value="訂單_20241208")
 
-with col_left:
-    st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
-    
-    with st.container():
-        order_name = st.text_input("訂單名稱", value="訂單_20241208")
-        
-        st.caption("外箱尺寸 (cm)")
-        c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=45.0, step=1.0)
-        box_w = c2.number_input("寬", value=30.0, step=1.0)
-        box_h = c3.number_input("高", value=30.0, step=1.0)
-        
-        box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
+# 外箱尺寸一行三個 (數字小，適合併排)
+st.caption("外箱尺寸 (cm)")
+c1, c2, c3 = st.columns(3)
+box_l = c1.number_input("長", value=45.0, step=1.0)
+box_w = c2.number_input("寬", value=30.0, step=1.0)
+box_h = c3.number_input("高", value=30.0, step=1.0)
 
-with col_right:
-    st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
-    
-    if 'df' not in st.session_state:
-        st.session_state.df = pd.DataFrame(
-            [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
-                {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
-            ]
-        )
+# 重量獨立一行
+box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
-    edited_df = st.data_editor(
-        st.session_state.df,
-        num_rows="dynamic",
-        use_container_width=True,
-        height=280,
-        column_config={
-            "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
-            "長": st.column_config.NumberColumn(format="%.1f"),
-            "寬": st.column_config.NumberColumn(format="%.1f"),
-            "高": st.column_config.NumberColumn(format="%.1f"),
-            "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-        }
+# ==========================
+# 區塊 2：商品清單 (垂直排列)
+# ==========================
+st.markdown('<div class="section-header">2. 商品清單 (編輯表格)</div>', unsafe_allow_html=True)
+
+if 'df' not in st.session_state:
+    st.session_state.df = pd.DataFrame(
+        [
+            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
+            {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
+        ]
     )
 
-st.markdown("---")
+# 表格現在會自動佔滿寬度
+edited_df = st.data_editor(
+    st.session_state.df,
+    num_rows="dynamic",
+    use_container_width=True,
+    height=250,
+    column_config={
+        "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
+        "長": st.column_config.NumberColumn(format="%.1f"),
+        "寬": st.column_config.NumberColumn(format="%.1f"),
+        "高": st.column_config.NumberColumn(format="%.1f"),
+        "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
+    }
+)
+
+st.markdown("<br>", unsafe_allow_html=True) # 增加一點間距
 
 # ==========================
-# 中間：執行按鈕
+# 執行按鈕 (佔滿寬度)
 # ==========================
-b1, b2, b3 = st.columns([1, 2, 1])
-with b2:
-    run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
+run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
 
 # ==========================
-# 下半部：運算邏輯與結果
+# 區塊 3：結果 (垂直排列)
 # ==========================
 if run_button:
+    st.markdown('<div class="section-header">3. 運算結果</div>', unsafe_allow_html=True)
+    
     with st.spinner('正在進行智慧裝箱運算...'):
         max_weight_limit = 999999
         packer = Packer()
@@ -189,19 +191,16 @@ if run_button:
             tickfont=dict(color="#000000", size=12) 
         )
         
-        # === V31 修正：3D 圖表防裁切優化 ===
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            autosize=True, # 確保自動縮放
+            autosize=True, 
             scene=dict(
                 xaxis={**axis_config, 'title': '長 (L)'},
                 yaxis={**axis_config, 'title': '寬 (W)'},
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            # 增加一點邊距 (Margin)，避免座標軸文字貼邊被切掉
-            # 高度稍微調降至 500，適應大部分螢幕不被截斷
             margin=dict(t=20, b=20, l=10, r=10), 
             height=500 
         )
@@ -219,12 +218,10 @@ if run_button:
         for b in packer.bins:
             for item in b.items:
                 packed_counts[item.name] = packed_counts.get(item.name, 0) + 1
-                
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
                 idim_w, idim_d, idim_h = float(dim[0]), float(dim[1]), float(dim[2])
                 i_weight = float(item.weight)
-                
                 total_vol += (idim_w * idim_d * idim_h)
                 total_net_weight += i_weight
                 
@@ -287,7 +284,6 @@ if run_button:
         </div>
         """
 
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
         st.markdown(report_html, unsafe_allow_html=True)
         
         full_html_content = f"""
@@ -315,7 +311,8 @@ if run_button:
             data=full_html_content,
             file_name=file_name,
             mime="text/html",
-            type="primary"
+            type="primary",
+            use_container_width=True # 手機版按鈕也全寬
         )
 
         st.plotly_chart(fig, use_container_width=True)
