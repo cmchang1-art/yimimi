@@ -10,7 +10,7 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D 智能裝箱系統", initial_sidebar_state="expanded")
 
 # ==========================
-# V26 CSS：強制固定側邊欄 (移除開合功能)
+# V27 CSS：強制顯示黑色懸浮開關
 # ==========================
 st.markdown("""
 <style>
@@ -20,32 +20,62 @@ st.markdown("""
         color: #000000 !important;
     }
     
-    /* 2. 隱藏官方雜訊 */
+    /* 2. 隱藏雜訊 */
     [data-testid="stDecoration"] { display: none !important; }
     .stDeployButton { display: none !important; }
     footer { display: none !important; }
     #MainMenu { display: none !important; }
     [data-testid="stToolbar"] { display: none !important; }
     
-    /* 3. 處理 Header (透明化) */
+    /* 3. 讓 Header 透明，但保留點擊穿透能力 */
     [data-testid="stHeader"] {
         background-color: transparent !important;
-        z-index: 1 !important;
+        pointer-events: none !important;
     }
     
-    /* === 4. 關鍵修改：隱藏側邊欄開關按鈕 === */
-    /* 我們不要讓使用者關閉側邊欄，所以直接把按鈕藏起來 */
-    [data-testid="stSidebarCollapsedControl"] {
-        display: none !important;
+    /* === 4. 救回側邊欄按鈕 (關鍵修正) === */
+    
+    /* 無論側邊欄是開還是關，強制顯示這個控制按鈕 */
+    [data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarExpandedControl"] {
+        display: block !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        
+        /* 強制固定在左上角 */
+        position: fixed !important;
+        top: 20px !important;
+        left: 20px !important;
+        z-index: 1000000 !important;
+        
+        /* 樣式：黑色圓形按鈕 */
+        background-color: #000000 !important;
+        color: #ffffff !important;
+        border-radius: 50% !important;
+        width: 45px !important;
+        height: 45px !important;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.2) !important;
+        
+        /* 內容置中 */
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: transform 0.2s ease !important;
     }
     
-    /* 5. 確保側邊欄樣式正常 */
-    section[data-testid="stSidebar"] {
-        background-color: #f8f9fa !important; /* 給側邊欄一個淡淡的灰底，區分區塊 */
-        border-right: 1px solid #e0e0e0;
+    /* 滑鼠移過去放大 */
+    [data-testid="stSidebarCollapsedControl"]:hover {
+        transform: scale(1.1) !important;
+    }
+    
+    /* 強制按鈕內的箭頭圖示為白色 */
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+        width: 24px !important;
+        height: 24px !important;
     }
 
-    /* 6. 輸入框與表格樣式 */
+    /* 5. 確保輸入框文字清晰 */
     div[data-baseweb="input"] input,
     div[data-baseweb="select"] div,
     .stDataFrame, .stTable {
@@ -53,7 +83,7 @@ st.markdown("""
         background-color: #ffffff !important;
     }
 
-    /* 7. 報表卡片樣式 */
+    /* 6. 報表卡片樣式 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -65,21 +95,21 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 8. 圖表樣式 */
+    /* 7. 圖表樣式 */
     .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
     .xtick text, .ytick text, .ztick text {
         fill: #000000 !important;
         font-weight: bold !important;
     }
     
-    /* 9. 頂部間距調整 */
+    /* 8. 內容往下推 */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 4rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V26)")
+st.title("📦 3D 智能裝箱系統 (專業版 V27)")
 st.markdown("---")
 
 # ==========================
@@ -99,8 +129,7 @@ with st.sidebar:
     box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
     
     st.markdown("---")
-    # V26: 移除關於側邊欄的提示文字，因為現在不能關了
-    st.info("💡 修改數據後，請按下方按鈕執行。")
+    st.info("💡 側邊欄已固定。若收合，點擊左上角「黑色圓鈕」即可展開。")
     run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
 # ==========================
@@ -175,13 +204,13 @@ if run_button:
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # 裝箱 (優先大物件)
+        # 裝箱
         packer.pack(bigger_first=True)
         
         # 準備繪圖
         fig = go.Figure()
         
-        # 座標軸設定 (黑字)
+        # 座標軸設定
         axis_config = dict(
             backgroundcolor="white",
             showbackground=True,
@@ -203,7 +232,7 @@ if run_button:
             margin=dict(t=30, b=0, l=0, r=0), height=600
         )
 
-        # 畫外箱 (黑線)
+        # 畫外箱
         fig.add_trace(go.Scatter3d(
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
