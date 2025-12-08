@@ -10,7 +10,7 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：強制介面修復 (輸入框顯色 + 3D圖滿版)
+# CSS：強制介面修復
 # ==========================
 st.markdown("""
 <style>
@@ -20,11 +20,9 @@ st.markdown("""
         color: #000000 !important;
     }
     
-    /* 2. 徹底隱藏側邊欄與相關按鈕 */
+    /* 2. 隱藏不必要的元素 */
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="stSidebarCollapsedControl"] { display: none !important; }
-    
-    /* 3. 隱藏官方雜訊 */
     [data-testid="stDecoration"] { display: none !important; }
     .stDeployButton { display: none !important; }
     footer { display: none !important; }
@@ -32,28 +30,25 @@ st.markdown("""
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
 
-    /* === 4. 輸入框顯示修復 (關鍵修正) === */
-    /* 強制輸入框背景為白色，文字為黑色，邊框為深灰色 */
+    /* 3. 輸入框顯示修復 */
     input[type="text"], input[type="number"] {
         color: #000000 !important;
         background-color: #ffffff !important;
         border: 1px solid #999999 !important;
-        -webkit-text-fill-color: #000000 !important; /* 確保 Safari/iOS 也是黑色 */
+        -webkit-text-fill-color: #000000 !important;
     }
     
-    /* 修正輸入框容器樣式 */
     div[data-baseweb="input"], div[data-baseweb="select"] {
         background-color: #ffffff !important;
         border-color: #999999 !important;
     }
     
-    /* 修正表格內的文字顏色 */
     .stDataFrame, .stTable {
         color: #000000 !important;
         background-color: #ffffff !important;
     }
     
-    /* 5. 區塊標題優化 */
+    /* 4. 區塊標題 */
     .section-header {
         font-size: 1.2rem;
         font-weight: bold;
@@ -64,7 +59,7 @@ st.markdown("""
         padding-left: 10px;
     }
 
-    /* 6. 報表卡片樣式 */
+    /* 5. 報表卡片 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -76,14 +71,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 7. 圖表樣式 */
-    .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
-    .xtick text, .ytick text, .ztick text {
-        fill: #000000 !important;
-        font-weight: bold !important;
-    }
-    
-    /* 8. 調整頂部間距 */
+    /* 6. 調整頂部間距 */
     .block-container {
         padding-top: 2rem !important;
         padding-left: 0.5rem !important;
@@ -92,7 +80,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 修改標題
 st.title("📦 3D裝箱系統")
 st.markdown("---")
 
@@ -143,9 +130,6 @@ with col_right:
 
 st.markdown("---")
 
-# ==========================
-# 中間：執行按鈕
-# ==========================
 b1, b2, b3 = st.columns([1, 2, 1])
 with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
@@ -194,27 +178,35 @@ if run_button:
         
         fig = go.Figure()
         
-        axis_config = dict(
+        # === V37 修正：強制所有文字為黑色 (解決看不見的問題) ===
+        # 使用 plotly_white 模板，並強制覆蓋字體顏色
+        
+        axis_style = dict(
             backgroundcolor="white",
             showbackground=True,
-            zerolinecolor="#000000", 
-            gridcolor="#888888",    
-            linecolor="#000000",    
-            tickfont=dict(color="#000000", size=12) 
+            zerolinecolor="#000000",
+            gridcolor="#999999",
+            linecolor="#000000",
+            showgrid=True,
+            showline=True,
+            # 強制刻度文字為黑色，且加粗
+            tickfont=dict(color="black", size=12, family="Arial Black"),
+            # 強制標題文字為黑色
+            title=dict(font=dict(color="black", size=14, family="Arial Black"))
         )
         
-        # === 3D 圖表修正區塊 ===
         fig.update_layout(
+            template="plotly_white", # 強制使用白底模板
+            font=dict(color="black"), # 全局字體黑色
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             autosize=True, 
             scene=dict(
-                xaxis={**axis_config, 'title': '長 (L)'},
-                yaxis={**axis_config, 'title': '寬 (W)'},
-                zaxis={**axis_config, 'title': '高 (H)'},
+                xaxis={**axis_style, 'title': '長 (L)'},
+                yaxis={**axis_style, 'title': '寬 (W)'},
+                zaxis={**axis_style, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            # ★★★ 關鍵修正：邊距徹底歸零 ★★★
             margin=dict(t=0, b=0, l=0, r=0), 
             height=500 
         )
@@ -223,7 +215,7 @@ if run_button:
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
             z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='#000000', width=5), name='外箱'
+            mode='lines', line=dict(color='#000000', width=6), name='外箱'
         ))
 
         total_vol = 0
