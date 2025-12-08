@@ -298,7 +298,8 @@ if run_button:
         """
 
         st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        st.markdown(status_div, unsafe_allow_html=True)
+        st.markdown(report_html, unsafe_allow_html=True)
+
         
         full_html_content = f"""
         <html>
