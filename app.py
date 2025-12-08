@@ -5,16 +5,16 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定 (直接隱藏側邊欄)
+# 頁面設定 (修改標題)
 # ==========================
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# V35 CSS：純淨版面 + 手機圖表優化
+# V36 CSS：純淨版面 + 垂直佈局優化
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定 */
+    /* 1. 全域設定：白底黑字 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -46,10 +46,13 @@ st.markdown("""
         font-size: 1.2rem;
         font-weight: bold;
         color: #333;
-        margin-top: 10px;
-        margin-bottom: 5px;
+        margin-top: 20px;     /* 增加上方間距，垂直排列時區隔更明顯 */
+        margin-bottom: 10px;
         border-left: 5px solid #FF4B4B;
         padding-left: 10px;
+        background-color: #f4f4f4; /* 增加底色條，讓標題更清楚 */
+        padding-top: 5px;
+        padding-bottom: 5px;
     }
 
     /* 6. 報表卡片樣式 */
@@ -71,12 +74,9 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    /* 8. 針對手機調整頂部與左右邊距 */
+    /* 8. 調整頂部間距 */
     .block-container {
         padding-top: 2rem !important;
-        /* 極大化手機寬度利用，減少留白 */
-        padding-left: 0.5rem !important; 
-        padding-right: 0.5rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -86,55 +86,57 @@ st.title("📦 3D裝箱系統")
 st.markdown("---")
 
 # ==========================
-# 上半部：輸入區域
+# 區塊 1：訂單與外箱設定 (垂直排列 - 上)
 # ==========================
+st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
 
-col_left, col_right = st.columns([1, 2], gap="large")
-
-with col_left:
-    st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
+with st.container():
+    # 訂單名稱
+    order_name = st.text_input("訂單名稱", value="訂單_20241208")
     
-    with st.container():
-        order_name = st.text_input("訂單名稱", value="訂單_20241208")
-        
-        st.caption("外箱尺寸 (cm)")
-        c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=45.0, step=1.0)
-        box_w = c2.number_input("寬", value=30.0, step=1.0)
-        box_h = c3.number_input("高", value=30.0, step=1.0)
-        
-        box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
-
-with col_right:
-    st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
+    # 外箱尺寸 (並排顯示比較省空間)
+    st.caption("外箱尺寸 (cm)")
+    c1, c2, c3 = st.columns(3)
+    box_l = c1.number_input("長", value=45.0, step=1.0)
+    box_w = c2.number_input("寬", value=30.0, step=1.0)
+    box_h = c3.number_input("高", value=30.0, step=1.0)
     
-    if 'df' not in st.session_state:
-        st.session_state.df = pd.DataFrame(
-            [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
-                {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
-            ]
-        )
+    # 重量
+    box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
-    edited_df = st.data_editor(
-        st.session_state.df,
-        num_rows="dynamic",
-        use_container_width=True,
-        height=280,
-        column_config={
-            "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
-            "長": st.column_config.NumberColumn(format="%.1f"),
-            "寬": st.column_config.NumberColumn(format="%.1f"),
-            "高": st.column_config.NumberColumn(format="%.1f"),
-            "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-        }
+# ==========================
+# 區塊 2：商品清單 (垂直排列 - 下)
+# ==========================
+st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
+
+if 'df' not in st.session_state:
+    st.session_state.df = pd.DataFrame(
+        [
+            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
+            {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
+        ]
     )
+
+edited_df = st.data_editor(
+    st.session_state.df,
+    num_rows="dynamic",
+    use_container_width=True,
+    height=280,
+    column_config={
+        "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
+        "長": st.column_config.NumberColumn(format="%.1f"),
+        "寬": st.column_config.NumberColumn(format="%.1f"),
+        "高": st.column_config.NumberColumn(format="%.1f"),
+        "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
+    }
+)
 
 st.markdown("---")
 
 # ==========================
 # 中間：執行按鈕
 # ==========================
+# 使用 columns 讓按鈕在中間，但在手機上會自動變全寬
 b1, b2, b3 = st.columns([1, 2, 1])
 with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
@@ -192,7 +194,7 @@ if run_button:
             tickfont=dict(color="#000000", size=12) 
         )
         
-        # === V35 關鍵修改：針對手機的 3D 圖表滿版優化 ===
+        # === V36 3D 圖表滿版修復 ===
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
@@ -203,9 +205,8 @@ if run_button:
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            # ★★★ 關鍵：將左右邊距 (l, r) 設為 0 ★★★
-            # 這樣圖表就會直接貼齊手機螢幕邊緣，不會被留白擠壓
-            margin=dict(t=20, b=20, l=0, r=0), 
+            # 關鍵：左右邊距歸零 (l=0, r=0)，讓圖表撐滿手機寬度
+            margin=dict(t=10, b=10, l=0, r=0), 
             height=500 
         )
 
