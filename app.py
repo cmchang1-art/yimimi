@@ -189,7 +189,7 @@ if run_button:
             linecolor="#000000",
             showgrid=True,
             showline=True,
-            # 強制刻度文字為黑色，且加粗
+            # 強制刻度數字為黑色，且加粗
             tickfont=dict(color="black", size=12, family="Arial Black"),
             # 強制標題文字為黑色
             title=dict(font=dict(color="black", size=14, family="Arial Black"))
