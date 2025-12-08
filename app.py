@@ -192,9 +192,10 @@ if run_button:
             title=dict(font=dict(color="black", size=14, family="Arial Black"))
         )
         
+        # 修改區塊：調整 layout 設定以符合截圖需求
         fig.update_layout(
             template="plotly_white", # 強制白底
-            font=dict(color="black"), # 全局黑色字體 (解決文字看不到)
+            font=dict(color="black"), # 全局黑色字體
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             autosize=True, 
@@ -202,12 +203,19 @@ if run_button:
                 xaxis={**axis_config, 'title': '長 (L)'},
                 yaxis={**axis_config, 'title': '寬 (W)'},
                 zaxis={**axis_config, 'title': '高 (H)'},
-                aspectmode='data'
+                aspectmode='data',
+                # 新增：設定相機視角，模擬圖片中的等角視圖 (Isometric View)
+                camera=dict(
+                    eye=dict(x=1.6, y=1.6, z=1.6)
+                )
             ),
-            margin=dict(t=0, b=0, l=0, r=0), 
-            height=500,
-            # 2. 關鍵修正：強制圖例文字顏色為黑色，並給一個半透明白底
+            margin=dict(t=30, b=0, l=0, r=0), 
+            height=600, # 稍微增高讓顯示更清楚
+            # 修改：圖例位置調整至左上角
             legend=dict(
+                x=0, y=1, # 強制左上角
+                xanchor="left",
+                yanchor="top",
                 font=dict(color="black", size=13),
                 bgcolor="rgba(255,255,255,0.8)",
                 bordercolor="#000000",
@@ -298,47 +306,37 @@ if run_button:
         """
 
         st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        
-        # ==========================================
-        # 修改部分：改為左右兩欄佈局
-        # 左欄：報告卡片 + 下載按鈕
-        # 右欄：3D 顯示
-        # ==========================================
-        col_res_left, col_res_right = st.columns([1, 2], gap="medium")
-        
-        with col_res_left:
-            st.markdown(report_html, unsafe_allow_html=True)
-            
-            full_html_content = f"""
-            <html>
-            <head>
-                <title>裝箱報告 - {order_name}</title>
-                <meta charset="utf-8">
-            </head>
-            <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
-                <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    {report_html.replace('class="report-card"', '')}
-                    <div style="margin-top: 30px;">
-                        <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
-                        {fig.to_html(include_plotlyjs='cdn', full_html=False)}
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            
-            file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
-            
-            st.download_button(
-                label="📥 下載完整裝箱報告 (.html)",
-                data=full_html_content,
-                file_name=file_name,
-                mime="text/html",
-                type="primary",
-                use_container_width=True
-            )
+        st.markdown(report_html, unsafe_allow_html=True)
 
-        with col_res_right:
-            # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
-            # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
-            st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
+        
+        full_html_content = f"""
+        <html>
+        <head>
+            <title>裝箱報告 - {order_name}</title>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
+            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                {report_html.replace('class="report-card"', '')}
+                <div style="margin-top: 30px;">
+                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
+                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
+        
+        st.download_button(
+            label="📥 下載完整裝箱報告 (.html)",
+            data=full_html_content,
+            file_name=file_name,
+            mime="text/html",
+            type="primary"
+        )
+
+        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
+        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
+        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
