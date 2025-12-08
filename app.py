@@ -7,9 +7,9 @@ import datetime
 # ==========================
 # 頁面設定與 CSS 強制優化
 # ==========================
-st.set_page_config(layout="wide", page_title="3D 智能裝箱系統")
+st.set_page_config(layout="wide", page_title="YIMIMI 3D智能裝箱系統")
 
-# V17 新增：強制全站明亮模式與文字清晰化 CSS
+# V18 持續優化 CSS：確保圖表文字清晰
 st.markdown("""
 <style>
     /* 強制整個 App 背景為白色，文字為黑色 */
@@ -39,10 +39,15 @@ st.markdown("""
     .js-plotly-plot .plotly .bg {
         fill: #ffffff !important;
     }
+    /* V18 新增：強制 Plotly 座標軸文字顏色為深黑 */
+    .xtick text, .ytick text, .ztick text {
+        fill: #000000 !important;
+        font-weight: bold !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V17)")
+st.title("📦 YIMIMI 3D智能裝箱系統 (專業版 V18)")
 st.markdown("---")
 
 # ==========================
@@ -63,7 +68,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.info("💡 修改下方商品清單後，請點擊執行按鈕。")
-    run_button = st.button("🔄 執行裝箱運算 (重力優化)", type="primary")
+    # V18 更新按鈕文字
+    run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
 # ==========================
 # 主畫面：商品清單
@@ -97,11 +103,13 @@ edited_df = st.data_editor(
 # 運算邏輯
 # ==========================
 if run_button:
-    with st.spinner('正在進行 3D 運算 (已啟用重力堆疊優化)...'):
+    with st.spinner('正在進行 3D 運算 (已啟用空間最大化演算法)...'):
         # 準備數據
         max_weight_limit = 999999
         packer = Packer()
-        packer.add_bin(Bin('StandardBox', box_l, box_w, box_h, max_weight_limit))
+        # 建立外箱
+        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
+        packer.add_bin(box)
         
         requested_counts = {}
         unique_products = []
@@ -126,7 +134,9 @@ if run_button:
                     requested_counts[name] += qty
                     
                     for _ in range(qty):
-                        packer.add_item(Item(name, l, w, h, weight))
+                        # 建立商品項，預設允許所有方向旋轉
+                        item = Item(name, l, w, h, weight)
+                        packer.add_item(item)
             except:
                 pass
 
@@ -134,32 +144,44 @@ if run_button:
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # === V17 關鍵修改：優化裝箱指令 ===
-        # bigger_first=True: 優先裝載大體積商品，建立穩固底部
-        # distribute_items=True: 嘗試更均勻地分佈商品
-        packer.pack(bigger_first=True, distribute_items=True)
+        # === V18 關鍵修改：優化裝箱指令 ===
+        # bigger_first=True: 優先裝載大體積商品 (這是空間利用率的關鍵)
+        # 移除了 distribute_items=True，避免為了重量平衡而導致奇怪的群組或懸空
+        # 系統預設會嘗試 6 種方向旋轉來尋找最佳位置
+        packer.pack(bigger_first=True)
         
         # 準備繪圖
         fig = go.Figure()
         
-        # 畫外箱 (設定背景為白色)
+        # === V18 關鍵修改：優化圖表座標軸清晰度 ===
+        # 將所有網格線、座標線、數字刻度都強制設為深黑色
+        axis_config = dict(
+            backgroundcolor="white",
+            showbackground=True,
+            zerolinecolor="#000000", # 深黑零線
+            gridcolor="#888888",    # 深灰網格
+            linecolor="#000000",    # 深黑座標軸線
+            tickfont=dict(color="#000000", size=12) # 深黑刻度文字
+        )
+        
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             scene=dict(
-                xaxis=dict(backgroundcolor="white", showbackground=True, zerolinecolor="#666"),
-                yaxis=dict(backgroundcolor="white", showbackground=True, zerolinecolor="#666"),
-                zaxis=dict(backgroundcolor="white", showbackground=True, zerolinecolor="#666"),
-                xaxis_title='長 (L)', yaxis_title='寬 (W)', zaxis_title='高 (H)', aspectmode='data'
+                xaxis={**axis_config, 'title': '長 (L)'},
+                yaxis={**axis_config, 'title': '寬 (W)'},
+                zaxis={**axis_config, 'title': '高 (H)'},
+                aspectmode='data'
             ),
             margin=dict(t=30, b=0, l=0, r=0), height=600
         )
 
+        # 畫外箱 (深黑色線框)
         fig.add_trace(go.Scatter3d(
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
             z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='#333333', width=4), name='外箱'
+            mode='lines', line=dict(color='#000000', width=5), name='外箱'
         ))
 
         total_vol = 0
@@ -179,7 +201,7 @@ if run_button:
                 total_net_weight += i_weight
                 
                 color = product_colors.get(item.name, '#888')
-                hover_text = f"{item.name}<br>{idim_w}x{idim_d}x{idim_h}<br>{i_weight:.2f}kg<br>位置:({x},{y},{z})"
+                hover_text = f"{item.name}<br>實際佔用: {idim_w}x{idim_d}x{idim_h}<br>重量: {i_weight:.2f}kg<br>位置:({x},{y},{z})"
                 
                 fig.add_trace(go.Mesh3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
@@ -190,10 +212,10 @@ if run_button:
                     k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
                     color=color, opacity=1, name=item.name, showlegend=True,
                     text=hover_text, hoverinfo='text',
-                    lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), # 增加光影立體感
+                    lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
                     lightposition=dict(x=1000, y=1000, z=2000)
                 ))
-                # 黑色邊框線條，增加清晰度
+                # 黑色邊框線條
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
                     y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
@@ -227,7 +249,7 @@ if run_button:
 
         status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
 
-        # 生成 HTML 報告 (優化樣式)
+        # 生成 HTML 報告
         report_html = f"""
         <div class="report-card">
             <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
