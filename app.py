@@ -150,7 +150,31 @@ if run_button:
         total_qty = 0
         total_net_weight = 0
         
-        for index, row in edited_df.iterrows():
+if run_button:
+    with st.spinner('正在進行智慧裝箱運算...'):
+        max_weight_limit = 999999
+        packer = Packer()
+        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
+        packer.add_bin(box)
+        
+        requested_counts = {}
+        unique_products = []
+        total_qty = 0
+        total_net_weight = 0
+        
+        # ==========================================
+        # 修改開始：增加排序邏輯 (解決紙袋放不下的問題)
+        # ==========================================
+        
+        # 1. 先計算每個商品的「底面積」(長 x 寬)
+        #    我們希望底面積大的(如紙袋)先被處理，鋪在最下面
+        edited_df['base_area'] = edited_df['長'] * edited_df['寬']
+        
+        # 2. 依照底面積由大到小排序 (ascending=False)
+        sorted_df = edited_df.sort_values(by='base_area', ascending=False)
+
+        # 3. 使用排序後的 sorted_df 進行迴圈
+        for index, row in sorted_df.iterrows():
             try:
                 name = str(row["商品名稱"])
                 l = float(row["長"])
@@ -175,9 +199,17 @@ if run_button:
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        packer.pack(bigger_first=True)
+        # 4. 關鍵修改：將 bigger_first 設為 False
+        #    這樣系統就會乖乖依照我們上面排好的順序(紙袋先)進行裝箱
+        packer.pack(bigger_first=False) 
         
+        # ==========================================
+        # 修改結束
+        # ==========================================
+
         fig = go.Figure()
+        # (下方繪圖程式碼保持不變...)
+        
         
         # 1. 座標軸樣式 (強制黑色)
         axis_config = dict(
