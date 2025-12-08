@@ -108,7 +108,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V25)")
+st.title("📦 3D智能裝箱系統")
 st.markdown("---")
 
 # ==========================
