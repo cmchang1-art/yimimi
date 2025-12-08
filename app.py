@@ -5,81 +5,47 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定 (預設展開側邊欄)
+# 頁面設定 (強制預設展開)
 # ==========================
-st.set_page_config(layout="wide", page_title="3D智能裝箱系統", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="3D 智能裝箱系統", initial_sidebar_state="expanded")
 
 # ==========================
-# V25 CSS：強制顯色與固定定位版
+# V26 CSS：強制固定側邊欄 (移除開合功能)
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定：白底黑字 */
+    /* 1. 全域設定 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
     }
     
-    /* 2. 隱藏不必要的官方元素 */
+    /* 2. 隱藏官方雜訊 */
     [data-testid="stDecoration"] { display: none !important; }
     .stDeployButton { display: none !important; }
     footer { display: none !important; }
     #MainMenu { display: none !important; }
     [data-testid="stToolbar"] { display: none !important; }
     
-    /* 3. 處理 Header (讓它隱形但保留佔位) */
+    /* 3. 處理 Header (透明化) */
     [data-testid="stHeader"] {
         background-color: transparent !important;
-        pointer-events: none !important; /* 讓點擊穿透 Header */
+        z-index: 1 !important;
     }
     
-    /* === 4. 關鍵修復：側邊欄開關按鈕 (展開與收合狀態通吃) === */
-    
-    /* 針對所有狀態的側邊欄按鈕 */
-    button[kind="header"], [data-testid="stSidebarCollapsedControl"] {
-        display: block !important;
-        visibility: visible !important;
-        pointer-events: auto !important; /* 恢復點擊 */
-        
-        /* 強制固定在左上角，不再依賴 Header */
-        position: fixed !important;
-        top: 15px !important;
-        left: 15px !important;
-        z-index: 9999999 !important;
-        
-        /* 樣式美化：加個底色確保看得到 */
-        background-color: #f0f2f6 !important; /* 淺灰色背景 */
-        border-radius: 50% !important;
-        width: 40px !important;
-        height: 40px !important;
-        border: 1px solid #ccc !important;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important;
-        
-        /* 內容置中 */
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+    /* === 4. 關鍵修改：隱藏側邊欄開關按鈕 === */
+    /* 我們不要讓使用者關閉側邊欄，所以直接把按鈕藏起來 */
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
     }
     
-    /* 滑鼠移過去變深色 */
-    button[kind="header"]:hover, [data-testid="stSidebarCollapsedControl"]:hover {
-        background-color: #e0e0e0 !important;
-        transform: scale(1.05);
-    }
-    
-    /* 強制箭頭圖示為黑色 */
-    button[kind="header"] svg, [data-testid="stSidebarCollapsedControl"] svg {
-        fill: #000000 !important;
-        stroke: #000000 !important;
-        color: #000000 !important;
+    /* 5. 確保側邊欄樣式正常 */
+    section[data-testid="stSidebar"] {
+        background-color: #f8f9fa !important; /* 給側邊欄一個淡淡的灰底，區分區塊 */
+        border-right: 1px solid #e0e0e0;
     }
 
-    /* 5. 內容區域往下推，避免被按鈕擋住 */
-    .block-container {
-        padding-top: 3.5rem !important;
-    }
-
-    /* 6. 輸入框與表格樣式修正 */
+    /* 6. 輸入框與表格樣式 */
     div[data-baseweb="input"] input,
     div[data-baseweb="select"] div,
     .stDataFrame, .stTable {
@@ -105,10 +71,15 @@ st.markdown("""
         fill: #000000 !important;
         font-weight: bold !important;
     }
+    
+    /* 9. 頂部間距調整 */
+    .block-container {
+        padding-top: 2rem !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D智能裝箱系統")
+st.title("📦 3D 智能裝箱系統 (專業版 V26)")
 st.markdown("---")
 
 # ==========================
@@ -128,7 +99,8 @@ with st.sidebar:
     box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
     
     st.markdown("---")
-    st.info("💡 若側邊欄收起了，請點擊左上角的「圓形按鈕」展開。")
+    # V26: 移除關於側邊欄的提示文字，因為現在不能關了
+    st.info("💡 修改數據後，請按下方按鈕執行。")
     run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
 # ==========================
