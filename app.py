@@ -5,12 +5,12 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定 (直接隱藏側邊欄)
+# 頁面設定 (修改標題)
 # ==========================
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# V28 CSS：純淨版面，完全隱藏側邊欄與雜訊
+# V31 CSS：純淨版面
 # ==========================
 st.markdown("""
 <style>
@@ -20,7 +20,7 @@ st.markdown("""
         color: #000000 !important;
     }
     
-    /* 2. 徹底隱藏側邊欄與相關按鈕 (我們不需要它了) */
+    /* 2. 徹底隱藏側邊欄與相關按鈕 */
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="stSidebarCollapsedControl"] { display: none !important; }
     
@@ -37,7 +37,7 @@ st.markdown("""
     div[data-baseweb="select"] div,
     .stDataFrame, .stTable {
         color: #000000 !important;
-        background-color: #f9f9f9 !important; /* 淡淡的灰底，增加辨識度 */
+        background-color: #f9f9f9 !important;
         border-color: #cccccc !important;
     }
     
@@ -78,20 +78,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# 修改標題
 st.title("📦 3D裝箱系統")
 st.markdown("---")
 
 # ==========================
-# 上半部：輸入區域 (原本在側邊欄的東西，現在搬到這裡)
+# 上半部：輸入區域
 # ==========================
 
-# 建立兩欄佈局：左邊設定訂單與外箱，右邊設定商品
 col_left, col_right = st.columns([1, 2], gap="large")
 
 with col_left:
     st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
     
-    # 使用 Expander 讓介面看起來不擁擠，預設展開
     with st.container():
         order_name = st.text_input("訂單名稱", value="訂單_20241208")
         
@@ -106,7 +105,6 @@ with col_left:
 with col_right:
     st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
     
-    # 預設數據
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame(
             [
@@ -115,12 +113,11 @@ with col_right:
             ]
         )
 
-    # 可編輯表格
     edited_df = st.data_editor(
         st.session_state.df,
         num_rows="dynamic",
         use_container_width=True,
-        height=280, # 固定高度讓版面整齊
+        height=280,
         column_config={
             "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
             "長": st.column_config.NumberColumn(format="%.1f"),
@@ -135,7 +132,6 @@ st.markdown("---")
 # ==========================
 # 中間：執行按鈕
 # ==========================
-# 讓按鈕置中且大顆
 b1, b2, b3 = st.columns([1, 2, 1])
 with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
@@ -145,10 +141,8 @@ with b2:
 # ==========================
 if run_button:
     with st.spinner('正在進行智慧裝箱運算...'):
-        # 準備數據
         max_weight_limit = 999999
         packer = Packer()
-        # 建立外箱
         box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
         packer.add_bin(box)
         
@@ -157,7 +151,6 @@ if run_button:
         total_qty = 0
         total_net_weight = 0
         
-        # 讀取表格數據
         for index, row in edited_df.iterrows():
             try:
                 name = str(row["商品名稱"])
@@ -180,17 +173,13 @@ if run_button:
             except:
                 pass
 
-        # 顏色分配
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # 裝箱 (優先大物件)
         packer.pack(bigger_first=True)
         
-        # 準備繪圖
         fig = go.Figure()
         
-        # 座標軸設定 (黑字)
         axis_config = dict(
             backgroundcolor="white",
             showbackground=True,
@@ -200,19 +189,23 @@ if run_button:
             tickfont=dict(color="#000000", size=12) 
         )
         
+        # === V31 修正：3D 圖表防裁切優化 ===
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
+            autosize=True, # 確保自動縮放
             scene=dict(
                 xaxis={**axis_config, 'title': '長 (L)'},
                 yaxis={**axis_config, 'title': '寬 (W)'},
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            margin=dict(t=10, b=0, l=0, r=0), height=600
+            # 增加一點邊距 (Margin)，避免座標軸文字貼邊被切掉
+            # 高度稍微調降至 500，適應大部分螢幕不被截斷
+            margin=dict(t=20, b=20, l=10, r=10), 
+            height=500 
         )
 
-        # 畫外箱 (黑線)
         fig.add_trace(go.Scatter3d(
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
@@ -223,7 +216,6 @@ if run_button:
         total_vol = 0
         packed_counts = {}
         
-        # 畫商品
         for b in packer.bins:
             for item in b.items:
                 packed_counts[item.name] = packed_counts.get(item.name, 0) + 1
@@ -258,21 +250,17 @@ if run_button:
                     mode='lines', line=dict(color='#000000', width=2), showlegend=False
                 ))
 
-        # 整理圖表
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
         
-        # 統計
         box_vol = box_l * box_w * box_h
         utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
         
-        # 台灣時間
         tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
         now_str = tw_time.strftime("%Y-%m-%d %H:%M")
         file_time_str = tw_time.strftime("%Y%m%d_%H%M")
         
-        # 檢查
         all_fitted = True
         missing_items_html = ""
         for name, req_qty in requested_counts.items():
@@ -284,7 +272,6 @@ if run_button:
 
         status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
 
-        # 生成報告
         report_html = f"""
         <div class="report-card">
             <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
@@ -300,11 +287,9 @@ if run_button:
         </div>
         """
 
-        # 顯示區域
         st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
         st.markdown(report_html, unsafe_allow_html=True)
         
-        # 下載按鈕
         full_html_content = f"""
         <html>
         <head>
