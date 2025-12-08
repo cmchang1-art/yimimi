@@ -5,11 +5,13 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定與 CSS 強制優化
+# 頁面設定
 # ==========================
 st.set_page_config(layout="wide", page_title="3D智能裝箱系統")
 
-# V21 CSS 終極修復：解決頂部黑色色塊問題，還原乾淨箭頭
+# ==========================
+# V22 CSS 終極修復：確保側邊欄箭頭永遠可見
+# ==========================
 st.markdown("""
 <style>
     /* 1. 強制背景白、文字黑 */
@@ -24,44 +26,54 @@ st.markdown("""
         background-color: #ffffff !important;
     }
     
-    /* 2. 精準隱藏與顯示控制 (V21 修正) */
+    /* 2. 隱藏不必要的官方元素 */
     
-    /* 隱藏裝飾彩條 */
-    [data-testid="stDecoration"] { display: none; }
-    
-    /* 隱藏右下角按鈕與頁尾 */
-    .stDeployButton { display: none; }
-    footer { display: none; }
-    #MainMenu { display: none; }
-    
-    /* === 關鍵修正：頂部標題列 === */
-    /* 將 Header 背景設為透明，避免出現黑色色塊 */
-    [data-testid="stHeader"] {
-        background-color: transparent !important;
-        color: black !important;
+    /* 隱藏頂部彩虹條 */
+    [data-testid="stDecoration"] {
+        display: none;
     }
     
-    /* 隱藏右側的工具列 (漢堡選單) */
+    /* 隱藏右下角 Manage app 按鈕 */
+    .stDeployButton {
+        display: none;
+    }
+    
+    /* 隱藏頁尾 */
+    footer {
+        visibility: hidden;
+    }
+    
+    /* 3. Header 區域控制 (關鍵修正) */
+    
+    /* 讓 Header 區域可見，但背景透明 */
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+        visibility: visible !important;
+    }
+    
+    /* 隱藏 Header 右邊的漢堡選單 (Options) */
     [data-testid="stToolbar"] {
+        visibility: hidden !important;
         display: none !important;
     }
     
-    /* === 關鍵修正：左上角箭頭按鈕 === */
-    /* 強制顯示箭頭，並設定為黑色，背景透明 */
+    /* === 4. 側邊欄開關按鈕 (救回箭頭) === */
+    
+    /* 強制顯示左上角的展開按鈕 */
     [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
         display: block !important;
-        color: #000000 !important;
-        background-color: transparent !important;
-        border: none !important;
+        color: #000000 !important; /* 黑色 */
+        z-index: 999999 !important; /* 確保在最上層 */
     }
     
-    /* 確保箭頭圖示本身是黑色的 */
+    /* 強制按鈕內的箭頭圖示為黑色 */
     [data-testid="stSidebarCollapsedControl"] svg {
         fill: #000000 !important;
         stroke: #000000 !important;
     }
-    
-    /* 3. 報表卡片樣式 */
+
+    /* 5. 報表卡片樣式 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -73,7 +85,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 4. 圖表樣式 (座標軸全黑) */
+    /* 6. 圖表座標軸樣式 */
     .js-plotly-plot .plotly .bg {
         fill: #ffffff !important;
     }
@@ -82,9 +94,9 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    /* 5. 調整頂部間距 */
+    /* 7. 調整頂部間距 */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 3rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -109,7 +121,7 @@ with st.sidebar:
     box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
     
     st.markdown("---")
-    st.info("💡 修改下方商品清單後，請點擊執行按鈕。")
+    st.info("💡 若側邊欄收起了，請點擊左上角的黑色箭頭「>」展開。")
     run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
 # ==========================
