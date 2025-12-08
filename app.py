@@ -7,7 +7,7 @@ import datetime
 # ==========================
 # 頁面設定 (預設展開側邊欄)
 # ==========================
-st.set_page_config(layout="wide", page_title="3D 智能裝箱系統", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="3D智能裝箱系統", initial_sidebar_state="expanded")
 
 # ==========================
 # V25 CSS：強制顯色與固定定位版
