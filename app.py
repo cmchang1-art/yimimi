@@ -298,37 +298,47 @@ if run_button:
         """
 
         st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        st.markdown(report_html, unsafe_allow_html=True)
-
         
-        full_html_content = f"""
-        <html>
-        <head>
-            <title>裝箱報告 - {order_name}</title>
-            <meta charset="utf-8">
-        </head>
-        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
-            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                {report_html.replace('class="report-card"', '')}
-                <div style="margin-top: 30px;">
-                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
-                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+        # ==========================================
+        # 修改部分：改為左右兩欄佈局
+        # 左欄：報告卡片 + 下載按鈕
+        # 右欄：3D 顯示
+        # ==========================================
+        col_res_left, col_res_right = st.columns([1, 2], gap="medium")
+        
+        with col_res_left:
+            st.markdown(report_html, unsafe_allow_html=True)
+            
+            full_html_content = f"""
+            <html>
+            <head>
+                <title>裝箱報告 - {order_name}</title>
+                <meta charset="utf-8">
+            </head>
+            <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
+                <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                    {report_html.replace('class="report-card"', '')}
+                    <div style="margin-top: 30px;">
+                        <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
+                        {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+                    </div>
                 </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
-        
-        st.download_button(
-            label="📥 下載完整裝箱報告 (.html)",
-            data=full_html_content,
-            file_name=file_name,
-            mime="text/html",
-            type="primary"
-        )
+            </body>
+            </html>
+            """
+            
+            file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
+            
+            st.download_button(
+                label="📥 下載完整裝箱報告 (.html)",
+                data=full_html_content,
+                file_name=file_name,
+                mime="text/html",
+                type="primary",
+                use_container_width=True
+            )
 
-        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
-        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
-        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
+        with col_res_right:
+            # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
+            # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
+            st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
