@@ -5,12 +5,12 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定
+# 頁面設定 (預設展開側邊欄)
 # ==========================
-st.set_page_config(layout="wide", page_title="3D 智能裝箱系統")
+st.set_page_config(layout="wide", page_title="3D 智能裝箱系統", initial_sidebar_state="expanded")
 
 # ==========================
-# V23 CSS 核彈級修復：強制懸浮按鈕
+# V24 CSS 絕對安全版：不再暴力隱藏 Header
 # ==========================
 st.markdown("""
 <style>
@@ -19,72 +19,48 @@ st.markdown("""
         background-color: #ffffff !important;
         color: #000000 !important;
     }
+    
+    /* 2. 隱藏不必要的官方元素 (只藏右邊和下面) */
+    [data-testid="stDecoration"] { display: none; } /* 頂部彩條 */
+    .stDeployButton { display: none; }              /* Deploy 按鈕 */
+    footer { display: none; }                       /* 頁尾 */
+    
+    /* 3. 頂部標題列 (Header) 設定 - 關鍵修改 */
+    /* 我們不隱藏它，而是讓它透明，這樣按鈕一定會在 */
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+        visibility: visible !important; 
+    }
+    
+    /* 4. 隱藏右側漢堡選單 (Options) */
+    [data-testid="stToolbar"] {
+        visibility: hidden !important; 
+        display: none !important;
+    }
+    
+    /* 5. 強制顯示左側展開按鈕 (箭頭) */
+    /* 無論是電腦版箭頭還是手機版漢堡，都強制顯示為黑色 */
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: block !important;
+        color: #000000 !important;
+    }
+    
+    /* 針對按鈕內的圖示強制上色 */
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: #000000 !important;
+        stroke: #000000 !important;
+    }
+    
+    /* 6. 輸入框與表格樣式修正 */
     div[data-baseweb="input"] input,
     div[data-baseweb="select"] div,
     .stDataFrame, .stTable {
         color: #000000 !important;
         background-color: #ffffff !important;
     }
-    
-    /* 2. 隱藏不必要的官方元素 */
-    [data-testid="stDecoration"] { display: none; } /* 彩條 */
-    [data-testid="stToolbar"] { display: none; }    /* 右上選單 */
-    .stDeployButton { display: none; }              /* Deploy 按鈕 */
-    footer { display: none; }                       /* 頁尾 */
-    
-    /* 3. 處理 Header 區域 */
-    /* 讓它隱形，但不要設為 none，以免影響佈局 */
-    [data-testid="stHeader"] {
-        background-color: transparent !important;
-        z-index: 1 !important; /* 層級調低 */
-    }
-    
-    /* === 4. 核彈級修復：側邊欄展開按鈕 === */
-    /* 將按鈕強制變成懸浮球，脫離 Header 控制 */
-    [data-testid="stSidebarCollapsedControl"] {
-        display: block !important;
-        visibility: visible !important;
-        position: fixed !important; /* 固定位置 */
-        top: 20px !important;       /* 距離頂部 20px */
-        left: 20px !important;      /* 距離左邊 20px */
-        z-index: 1000001 !important; /* 確保在最最最上層 */
-        
-        /* 按鈕樣式美化 */
-        background-color: #ffffff !important;
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 50% !important; /* 圓形 */
-        width: 45px !important;
-        height: 45px !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
-        
-        /* 讓內容置中 */
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    /* 滑鼠移過去的效果 */
-    [data-testid="stSidebarCollapsedControl"]:hover {
-        background-color: #f0f0f0 !important;
-        transform: scale(1.1) !important;
-    }
-    
-    /* 強制按鈕內的箭頭圖示為深黑色 */
-    [data-testid="stSidebarCollapsedControl"] svg {
-        fill: #000000 !important;
-        stroke: #000000 !important;
-        width: 24px !important;
-        height: 24px !important;
-    }
 
-    /* 5. 內容區域調整 */
-    /* 往下推一點，避免標題被懸浮按鈕擋住 */
-    .block-container {
-        padding-top: 4rem !important;
-    }
-
-    /* 6. 報表卡片樣式 */
+    /* 7. 報表卡片樣式 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -96,16 +72,21 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 7. 圖表樣式 */
+    /* 8. 圖表樣式 */
     .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
     .xtick text, .ytick text, .ztick text {
         fill: #000000 !important;
         font-weight: bold !important;
     }
+    
+    /* 9. 調整頂部間距 (因為 Header 還在，不需要推太多) */
+    .block-container {
+        padding-top: 2rem !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V23)")
+st.title("📦 3D 智能裝箱系統 (專業版 V24)")
 st.markdown("---")
 
 # ==========================
@@ -125,7 +106,7 @@ with st.sidebar:
     box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
     
     st.markdown("---")
-    st.info("💡 側邊欄收起後，點擊左上角的「懸浮圓鈕 >」即可展開。")
+    st.info("💡 側邊欄收起後，左上角會出現展開按鈕。")
     run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
 # ==========================
@@ -269,7 +250,7 @@ if run_button:
                 ))
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
+                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y+idim_d],
                     z=[z, z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z, z+idim_h, z+idim_h, z+idim_h, z, z],
                     mode='lines', line=dict(color='#000000', width=2), showlegend=False
                 ))
