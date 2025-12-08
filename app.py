@@ -5,26 +5,54 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定與 CSS 強制優化
+# 頁面設定
 # ==========================
-st.set_page_config(layout="wide", page_title="3D 智能裝箱系統")
+st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
-# V18 持續優化 CSS：確保圖表文字清晰
+# ==========================
+# CSS：維持您提供的純淨版面配置
+# ==========================
 st.markdown("""
 <style>
-    /* 強制整個 App 背景為白色，文字為黑色 */
+    /* 1. 全域設定：白底黑字 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
     }
-    /* 確保所有輸入框、表格文字都是黑色 */
+    
+    /* 2. 徹底隱藏側邊欄與相關按鈕 */
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+    
+    /* 3. 隱藏官方雜訊 */
+    [data-testid="stDecoration"] { display: none !important; }
+    .stDeployButton { display: none !important; }
+    footer { display: none !important; }
+    #MainMenu { display: none !important; }
+    [data-testid="stToolbar"] { display: none !important; }
+    [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
+
+    /* 4. 輸入框優化 */
     div[data-baseweb="input"] input,
     div[data-baseweb="select"] div,
     .stDataFrame, .stTable {
         color: #000000 !important;
-        background-color: #ffffff !important;
+        background-color: #f9f9f9 !important;
+        border-color: #cccccc !important;
     }
-    /* 報表卡片樣式優化 */
+    
+    /* 5. 區塊標題優化 */
+    .section-header {
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: #333;
+        margin-top: 10px;
+        margin-bottom: 5px;
+        border-left: 5px solid #FF4B4B;
+        padding-left: 10px;
+    }
+
+    /* 6. 報表卡片樣式 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -35,79 +63,89 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 20px;
     }
-    /* 讓 Plotly 圖表背景也變白 */
-    .js-plotly-plot .plotly .bg {
-        fill: #ffffff !important;
-    }
-    /* V18 新增：強制 Plotly 座標軸文字顏色為深黑 */
+    
+    /* 7. 圖表樣式 - 強制覆蓋 */
+    .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
     .xtick text, .ytick text, .ztick text {
         fill: #000000 !important;
         font-weight: bold !important;
     }
+    g.pointtext { fill: #000000 !important; }
+    
+    /* 8. 調整頂部間距 */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V18)")
+# 修改標題
+st.title("📦 3D裝箱系統")
 st.markdown("---")
 
 # ==========================
-# 側邊欄：設定區
+# 上半部：輸入區域
 # ==========================
-with st.sidebar:
-    st.header("📝 1. 訂單與外箱設定")
-    
-    order_name = st.text_input("訂單名稱", value="訂單_20241208")
-    
-    st.subheader("外箱規格")
-    col1, col2, col3 = st.columns(3)
-    box_l = col1.number_input("長 (cm)", value=45.0, step=1.0)
-    box_w = col2.number_input("寬 (cm)", value=30.0, step=1.0)
-    box_h = col3.number_input("高 (cm)", value=30.0, step=1.0)
-    
-    box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
-    
-    st.markdown("---")
-    st.info("💡 修改下方商品清單後，請點擊執行按鈕。")
-    # V18 更新按鈕文字
-    run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
-# ==========================
-# 主畫面：商品清單
-# ==========================
-st.header("🎁 2. 商品清單")
+col_left, col_right = st.columns([1, 2], gap="large")
 
-# 預設數據
-if 'df' not in st.session_state:
-    st.session_state.df = pd.DataFrame(
-        [
-            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
-            {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
-        ]
+with col_left:
+    st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
+    
+    with st.container():
+        order_name = st.text_input("訂單名稱", value="訂單_20241208")
+        
+        st.caption("外箱尺寸 (cm)")
+        c1, c2, c3 = st.columns(3)
+        box_l = c1.number_input("長", value=45.0, step=1.0)
+        box_w = c2.number_input("寬", value=30.0, step=1.0)
+        box_h = c3.number_input("高", value=30.0, step=1.0)
+        
+        box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
+
+with col_right:
+    st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
+    
+    if 'df' not in st.session_state:
+        st.session_state.df = pd.DataFrame(
+            [
+                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 7},
+                {"商品名稱": "禮盒(茶葉)", "長": 10.0, "寬": 10.0, "高": 15.0, "重量(kg)": 0.3, "數量": 2},
+            ]
+        )
+
+    edited_df = st.data_editor(
+        st.session_state.df,
+        num_rows="dynamic",
+        use_container_width=True,
+        height=280,
+        column_config={
+            "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
+            "長": st.column_config.NumberColumn(format="%.1f"),
+            "寬": st.column_config.NumberColumn(format="%.1f"),
+            "高": st.column_config.NumberColumn(format="%.1f"),
+            "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
+        }
     )
 
-# 可編輯表格
-edited_df = st.data_editor(
-    st.session_state.df,
-    num_rows="dynamic",
-    use_container_width=True,
-    column_config={
-        "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
-        "長": st.column_config.NumberColumn(format="%.1f"),
-        "寬": st.column_config.NumberColumn(format="%.1f"),
-        "高": st.column_config.NumberColumn(format="%.1f"),
-        "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-    }
-)
+st.markdown("---")
 
 # ==========================
-# 運算邏輯
+# 中間：執行按鈕
+# ==========================
+b1, b2, b3 = st.columns([1, 2, 1])
+with b2:
+    run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
+
+# ==========================
+# 下半部：運算邏輯與結果
 # ==========================
 if run_button:
-    with st.spinner('正在進行 3D 運算 (已啟用空間最大化演算法)...'):
-        # 準備數據
+    with st.spinner('正在進行智慧裝箱運算...'):
         max_weight_limit = 999999
         packer = Packer()
-        # 建立外箱
         box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
         packer.add_bin(box)
         
@@ -116,7 +154,6 @@ if run_button:
         total_qty = 0
         total_net_weight = 0
         
-        # 讀取表格數據
         for index, row in edited_df.iterrows():
             try:
                 name = str(row["商品名稱"])
@@ -134,60 +171,64 @@ if run_button:
                     requested_counts[name] += qty
                     
                     for _ in range(qty):
-                        # 建立商品項，預設允許所有方向旋轉
                         item = Item(name, l, w, h, weight)
                         packer.add_item(item)
             except:
                 pass
 
-        # 顏色分配
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # === V18 關鍵修改：優化裝箱指令 ===
-        # bigger_first=True: 優先裝載大體積商品 (這是空間利用率的關鍵)
-        # 移除了 distribute_items=True，避免為了重量平衡而導致奇怪的群組或懸空
-        # 系統預設會嘗試 6 種方向旋轉來尋找最佳位置
         packer.pack(bigger_first=True)
         
-        # 準備繪圖
         fig = go.Figure()
         
-        # === V18 關鍵修改：優化圖表座標軸清晰度 ===
-        # 將所有網格線、座標線、數字刻度都強制設為深黑色
+        # === V38 關鍵修正：定義全黑座標軸樣式 ===
         axis_config = dict(
             backgroundcolor="white",
             showbackground=True,
-            zerolinecolor="#000000", # 深黑零線
-            gridcolor="#888888",    # 深灰網格
-            linecolor="#000000",    # 深黑座標軸線
-            tickfont=dict(color="#000000", size=12) # 深黑刻度文字
+            zerolinecolor="#000000",
+            gridcolor="#999999",
+            linecolor="#000000",
+            showgrid=True,
+            showline=True,
+            # 強制刻度數字為黑色
+            tickfont=dict(color="black", size=11, family="Arial"),
+            # 強制標題文字為黑色
+            title_font=dict(color="black", size=14, family="Arial Black")
         )
         
         fig.update_layout(
+            template="plotly_white", # 強制使用白底模板
+            font=dict(color="black"), # 強制全圖文字為黑色 (包含圖例)
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
+            autosize=True, 
             scene=dict(
                 xaxis={**axis_config, 'title': '長 (L)'},
                 yaxis={**axis_config, 'title': '寬 (W)'},
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            margin=dict(t=30, b=0, l=0, r=0), height=600
+            margin=dict(t=0, b=0, l=0, r=0), 
+            height=500,
+            legend=dict(
+                font=dict(color="black"), # 確保圖例文字是黑色
+                bgcolor="rgba(255,255,255,0.8)" # 圖例背景半透明白
+            )
         )
 
-        # 畫外箱 (深黑色線框)
+        # 畫外箱 (加粗黑線)
         fig.add_trace(go.Scatter3d(
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
             z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='#000000', width=5), name='外箱'
+            mode='lines', line=dict(color='#000000', width=6), name='外箱'
         ))
 
         total_vol = 0
         packed_counts = {}
         
-        # 畫商品
         for b in packer.bins:
             for item in b.items:
                 packed_counts[item.name] = packed_counts.get(item.name, 0) + 1
@@ -215,7 +256,6 @@ if run_button:
                     lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
                     lightposition=dict(x=1000, y=1000, z=2000)
                 ))
-                # 黑色邊框線條
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
                     y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
@@ -223,21 +263,17 @@ if run_button:
                     mode='lines', line=dict(color='#000000', width=2), showlegend=False
                 ))
 
-        # 整理圖表
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
         
-        # 統計與 HTML 生成
         box_vol = box_l * box_w * box_h
         utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
         
-        # 台灣時間
         tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
         now_str = tw_time.strftime("%Y-%m-%d %H:%M")
         file_time_str = tw_time.strftime("%Y%m%d_%H%M")
         
-        # 檢查遺漏
         all_fitted = True
         missing_items_html = ""
         for name, req_qty in requested_counts.items():
@@ -249,7 +285,6 @@ if run_button:
 
         status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
 
-        # 生成 HTML 報告
         report_html = f"""
         <div class="report-card">
             <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
@@ -265,15 +300,9 @@ if run_button:
         </div>
         """
 
-        # ==========================
-        # 3. 顯示結果區域
-        # ==========================
-        st.header("📊 3. 裝箱結果")
-        
-        # 1. 顯示 HTML 報告卡片
+        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
         st.markdown(report_html, unsafe_allow_html=True)
         
-        # 2. 下載按鈕
         full_html_content = f"""
         <html>
         <head>
@@ -302,5 +331,4 @@ if run_button:
             type="primary"
         )
 
-        # 3. 顯示 3D 圖
         st.plotly_chart(fig, use_container_width=True)
