@@ -7,7 +7,7 @@ import datetime
 # ==========================
 # 頁面設定與 CSS 強制優化
 # ==========================
-st.set_page_config(layout="wide", page_title="YIMIMI 3D智能裝箱系統")
+st.set_page_config(layout="wide", page_title="3D智能裝箱系統")
 
 # V18 持續優化 CSS：確保圖表文字清晰
 st.markdown("""
@@ -47,7 +47,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 YIMIMI 3D智能裝箱系統 (專業版 V18)")
+st.title("📦 3D智能裝箱系統")
 st.markdown("---")
 
 # ==========================
