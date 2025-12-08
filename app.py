@@ -5,12 +5,12 @@ import plotly.graph_objects as go
 import datetime
 
 # ==========================
-# 頁面設定 (恢復側邊欄)
+# 頁面設定
 # ==========================
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="expanded")
 
 # ==========================
-# CSS：強制介面修復 (側邊欄按鈕 + 顯色)
+# CSS：強制介面修復
 # ==========================
 st.markdown("""
 <style>
@@ -20,57 +20,55 @@ st.markdown("""
         color: #000000 !important;
     }
     
-    /* 2. 隱藏官方雜訊 (保留側邊欄功能) */
+    /* 2. 隱藏不必要的元素 */
     [data-testid="stDecoration"] { display: none !important; }
     .stDeployButton { display: none !important; }
     footer { display: none !important; }
     #MainMenu { display: none !important; }
     [data-testid="stToolbar"] { display: none !important; }
     
-    /* 3. Header 透明化 (讓按鈕可點擊) */
+    /* 3. Header 透明化 */
     [data-testid="stHeader"] { 
         background-color: transparent !important; 
         pointer-events: none; 
     }
 
-    /* === 4. 側邊欄開關按鈕 (強制顯示黑色按鈕) === */
+    /* 4. 側邊欄開關按鈕 (強制顯示黑色按鈕) */
     [data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarExpandedControl"] {
         display: block !important;
         visibility: visible !important;
         pointer-events: auto !important;
-        
-        /* 固定在左上角 */
         position: fixed !important;
         top: 15px !important;
         left: 15px !important;
         z-index: 1000000 !important;
-        
-        /* 樣式：黑色圓形 */
         background-color: #000000 !important;
         color: #ffffff !important;
         border-radius: 50% !important;
         width: 40px !important;
         height: 40px !important;
         box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
-        
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
     }
     
-    /* 按鈕圖示轉白 */
     [data-testid="stSidebarCollapsedControl"] svg, [data-testid="stSidebarExpandedControl"] svg {
         fill: #ffffff !important;
         stroke: #ffffff !important;
     }
 
     /* 5. 輸入框顯示修復 */
-    div[data-baseweb="input"] input, 
-    div[data-baseweb="select"] div {
+    input[type="text"], input[type="number"] {
         color: #000000 !important;
         background-color: #ffffff !important;
-        border-color: #999999 !important;
+        border: 1px solid #999999 !important;
         -webkit-text-fill-color: #000000 !important;
+    }
+    
+    div[data-baseweb="input"], div[data-baseweb="select"] {
+        background-color: #ffffff !important;
+        border-color: #999999 !important;
     }
     
     .stDataFrame, .stTable {
@@ -111,7 +109,7 @@ st.title("📦 3D裝箱系統")
 st.markdown("---")
 
 # ==========================
-# 側邊欄：設定區 (恢復佈局)
+# 側邊欄：設定區
 # ==========================
 with st.sidebar:
     st.header("📝 1. 訂單與外箱設定")
@@ -209,14 +207,13 @@ if run_button:
             linecolor="#000000",
             showgrid=True,
             showline=True,
-            # 強制黑色字體
             tickfont=dict(color="black", size=11, family="Arial Black"),
             title=dict(font=dict(color="black", size=14, family="Arial Black"))
         )
         
         fig.update_layout(
-            template="plotly_white", # 強制使用白底模板
-            font=dict(color="black"), # 全局黑色字體
+            template="plotly_white",
+            font=dict(color="black"),
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             autosize=True, 
@@ -226,7 +223,6 @@ if run_button:
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data'
             ),
-            # 邊距歸零，確保手機滿版
             margin=dict(t=0, b=0, l=0, r=0), 
             height=500,
             legend=dict(
@@ -310,4 +306,46 @@ if run_button:
                 <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
                 <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
                 <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight:
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
+                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
+            </table>
+            {status_html}
+        </div>
+        """
+
+        # 顯示區域
+        st.header("📊 3. 裝箱結果")
+        st.markdown(report_html, unsafe_allow_html=True)
+        
+        # 下載按鈕
+        full_html_content = f"""
+        <html>
+        <head>
+            <title>裝箱報告 - {order_name}</title>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
+            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                {report_html.replace('class="report-card"', '')}
+                <div style="margin-top: 30px;">
+                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
+                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
+        
+        st.download_button(
+            label="📥 下載完整裝箱報告 (.html)",
+            data=full_html_content,
+            file_name=file_name,
+            mime="text/html",
+            type="primary"
+        )
+
+        # 4. 關鍵修正：移除 ModeBar (工具列)，避免遮擋
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
