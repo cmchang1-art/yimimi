@@ -9,7 +9,7 @@ import datetime
 # ==========================
 st.set_page_config(layout="wide", page_title="3D智能裝箱系統")
 
-# V20 CSS 修正：只隱藏雜訊，保留側邊欄開關按鈕
+# V21 CSS 終極修復：解決頂部黑色色塊問題，還原乾淨箭頭
 st.markdown("""
 <style>
     /* 1. 強制背景白、文字黑 */
@@ -24,35 +24,41 @@ st.markdown("""
         background-color: #ffffff !important;
     }
     
-    /* 2. 精準隱藏 Streamlit 官方元素 (修正版) */
+    /* 2. 精準隱藏與顯示控制 (V21 修正) */
     
-    /* 隱藏頂部彩虹條 */
-    [data-testid="stDecoration"] {
-        display: none;
+    /* 隱藏裝飾彩條 */
+    [data-testid="stDecoration"] { display: none; }
+    
+    /* 隱藏右下角按鈕與頁尾 */
+    .stDeployButton { display: none; }
+    footer { display: none; }
+    #MainMenu { display: none; }
+    
+    /* === 關鍵修正：頂部標題列 === */
+    /* 將 Header 背景設為透明，避免出現黑色色塊 */
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+        color: black !important;
     }
     
-    /* 隱藏右下角 Manage app 按鈕 */
-    .stDeployButton {
-        display: none;
-    }
-    
-    /* 隱藏頁尾 Made with Streamlit */
-    footer {
-        visibility: hidden;
-    }
-    
-    /* 隱藏右上角的漢堡選單 (三個點)，但保留左邊的側邊欄開關 */
+    /* 隱藏右側的工具列 (漢堡選單) */
     [data-testid="stToolbar"] {
-        visibility: hidden;
+        display: none !important;
     }
     
-    /* === 關鍵修正 === */
-    /* 確保側邊欄的「展開箭頭 (>)" 是可見的，並且是黑色的 */
+    /* === 關鍵修正：左上角箭頭按鈕 === */
+    /* 強制顯示箭頭，並設定為黑色，背景透明 */
     [data-testid="stSidebarCollapsedControl"] {
-        visibility: visible !important;
         display: block !important;
         color: #000000 !important;
         background-color: transparent !important;
+        border: none !important;
+    }
+    
+    /* 確保箭頭圖示本身是黑色的 */
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: #000000 !important;
+        stroke: #000000 !important;
     }
     
     /* 3. 報表卡片樣式 */
@@ -67,7 +73,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 4. 圖表樣式 */
+    /* 4. 圖表樣式 (座標軸全黑) */
     .js-plotly-plot .plotly .bg {
         fill: #ffffff !important;
     }
@@ -78,7 +84,7 @@ st.markdown("""
     
     /* 5. 調整頂部間距 */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 1rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
