@@ -194,7 +194,7 @@ if run_button:
         
         fig.update_layout(
             template="plotly_white", # 強制白底
-            font=dict(color="black"), # 全局黑色字體
+            font=dict(color="black"), # 全局黑色字體 (解決文字看不到)
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             autosize=True, 
@@ -206,6 +206,7 @@ if run_button:
             ),
             margin=dict(t=0, b=0, l=0, r=0), 
             height=500,
+            # 2. 關鍵修正：強制圖例文字顏色為黑色，並給一個半透明白底
             legend=dict(
                 font=dict(color="black", size=13),
                 bgcolor="rgba(255,255,255,0.8)",
@@ -237,6 +238,7 @@ if run_button:
                 total_net_weight += i_weight
                 
                 color = product_colors.get(item.name, '#888')
+                # 提示文字
                 hover_text = f"{item.name}<br>實際佔用: {idim_w}x{idim_d}x{idim_h}<br>重量: {i_weight:.2f}kg<br>位置:({x},{y},{z})"
                 
                 fig.add_trace(go.Mesh3d(
@@ -261,11 +263,6 @@ if run_button:
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
         
-        # ==========================
-        # 修正後的顯示邏輯區塊
-        # ==========================
-        
-        # 1. 計算數據
         box_vol = box_l * box_w * box_h
         utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
@@ -274,7 +271,6 @@ if run_button:
         now_str = tw_time.strftime("%Y-%m-%d %H:%M")
         file_time_str = tw_time.strftime("%Y%m%d_%H%M")
         
-        # 2. 判斷裝箱狀態
         all_fitted = True
         missing_items_html = ""
         for name, req_qty in requested_counts.items():
@@ -284,11 +280,11 @@ if run_button:
                 diff = req_qty - real_qty
                 missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
 
-        # 狀態條 HTML
-        status_html = "<div style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb; font-size: 1.2rem; font-weight: bold; margin-bottom: 10px;'>✅ 完美！所有商品皆已裝入。</div>" if all_fitted else f"<div style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb; margin-bottom: 10px;'>❌ 注意：有部分商品裝不下！</div><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
+        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
 
-        # 3. 準備下載用的完整報告 (隱藏不顯示，僅存入檔案)
-        report_table_html = f"""
+        report_html = f"""
+        <div class="report-card">
+            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
             <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
                 <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
                 <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
@@ -297,19 +293,26 @@ if run_button:
                 <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
                 <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
             </table>
+            {status_html}
+        </div>
         """
+
+        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+        st.markdown(status_div, unsafe_allow_html=True)
         
         full_html_content = f"""
         <html>
-        <head><title>裝箱報告 - {order_name}</title><meta charset="utf-8"></head>
-        <body style="font-family: sans-serif; padding: 30px;">
-            <div style="max-width: 800px; margin: 0 auto; border: 1px solid #eee; padding: 20px; border-radius: 10px;">
-                <h2>📋 訂單裝箱報告</h2>
-                {report_table_html}
-                {status_html}
-                <hr>
-                <h3>🧊 3D 模擬視圖</h3>
-                {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+        <head>
+            <title>裝箱報告 - {order_name}</title>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
+            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+                {report_html.replace('class="report-card"', '')}
+                <div style="margin-top: 30px;">
+                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
+                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+                </div>
             </div>
         </body>
         </html>
@@ -317,22 +320,6 @@ if run_button:
         
         file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
         
-        # ==========================
-        # 4. 畫面顯示 (依照你的截圖順序排列)
-        # ==========================
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        
-        # (A) 空間利用率
-        col_util_1, col_util_2 = st.columns([1, 4])
-        with col_util_1:
-             st.markdown(f"**📊 空間利用率:**")
-        with col_util_2:
-             st.markdown(f"**{utilization:.2f}%**")
-
-        # (B) 狀態顯示 (綠色/紅色橫條)
-        st.markdown(status_html, unsafe_allow_html=True)
-
-        # (C) 下載按鈕 (紅色)
         st.download_button(
             label="📥 下載完整裝箱報告 (.html)",
             data=full_html_content,
@@ -341,5 +328,6 @@ if run_button:
             type="primary"
         )
 
-        # (D) 3D 圖表 (放在按鈕正下方)
+        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
+        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
         st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
