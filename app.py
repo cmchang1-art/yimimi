@@ -10,11 +10,11 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D 智能裝箱系統")
 
 # ==========================
-# V22 CSS 終極修復：確保側邊欄箭頭永遠可見
+# V23 CSS 核彈級修復：強制懸浮按鈕
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 強制背景白、文字黑 */
+    /* 1. 全域設定：白底黑字 */
     .stApp {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -27,53 +27,64 @@ st.markdown("""
     }
     
     /* 2. 隱藏不必要的官方元素 */
+    [data-testid="stDecoration"] { display: none; } /* 彩條 */
+    [data-testid="stToolbar"] { display: none; }    /* 右上選單 */
+    .stDeployButton { display: none; }              /* Deploy 按鈕 */
+    footer { display: none; }                       /* 頁尾 */
     
-    /* 隱藏頂部彩虹條 */
-    [data-testid="stDecoration"] {
-        display: none;
-    }
-    
-    /* 隱藏右下角 Manage app 按鈕 */
-    .stDeployButton {
-        display: none;
-    }
-    
-    /* 隱藏頁尾 */
-    footer {
-        visibility: hidden;
-    }
-    
-    /* 3. Header 區域控制 (關鍵修正) */
-    
-    /* 讓 Header 區域可見，但背景透明 */
+    /* 3. 處理 Header 區域 */
+    /* 讓它隱形，但不要設為 none，以免影響佈局 */
     [data-testid="stHeader"] {
         background-color: transparent !important;
-        visibility: visible !important;
+        z-index: 1 !important; /* 層級調低 */
     }
     
-    /* 隱藏 Header 右邊的漢堡選單 (Options) */
-    [data-testid="stToolbar"] {
-        visibility: hidden !important;
-        display: none !important;
-    }
-    
-    /* === 4. 側邊欄開關按鈕 (救回箭頭) === */
-    
-    /* 強制顯示左上角的展開按鈕 */
+    /* === 4. 核彈級修復：側邊欄展開按鈕 === */
+    /* 將按鈕強制變成懸浮球，脫離 Header 控制 */
     [data-testid="stSidebarCollapsedControl"] {
-        visibility: visible !important;
         display: block !important;
-        color: #000000 !important; /* 黑色 */
-        z-index: 999999 !important; /* 確保在最上層 */
+        visibility: visible !important;
+        position: fixed !important; /* 固定位置 */
+        top: 20px !important;       /* 距離頂部 20px */
+        left: 20px !important;      /* 距離左邊 20px */
+        z-index: 1000001 !important; /* 確保在最最最上層 */
+        
+        /* 按鈕樣式美化 */
+        background-color: #ffffff !important;
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 50% !important; /* 圓形 */
+        width: 45px !important;
+        height: 45px !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
+        
+        /* 讓內容置中 */
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: all 0.3s ease !important;
     }
     
-    /* 強制按鈕內的箭頭圖示為黑色 */
+    /* 滑鼠移過去的效果 */
+    [data-testid="stSidebarCollapsedControl"]:hover {
+        background-color: #f0f0f0 !important;
+        transform: scale(1.1) !important;
+    }
+    
+    /* 強制按鈕內的箭頭圖示為深黑色 */
     [data-testid="stSidebarCollapsedControl"] svg {
         fill: #000000 !important;
         stroke: #000000 !important;
+        width: 24px !important;
+        height: 24px !important;
     }
 
-    /* 5. 報表卡片樣式 */
+    /* 5. 內容區域調整 */
+    /* 往下推一點，避免標題被懸浮按鈕擋住 */
+    .block-container {
+        padding-top: 4rem !important;
+    }
+
+    /* 6. 報表卡片樣式 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; 
@@ -85,23 +96,16 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* 6. 圖表座標軸樣式 */
-    .js-plotly-plot .plotly .bg {
-        fill: #ffffff !important;
-    }
+    /* 7. 圖表樣式 */
+    .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
     .xtick text, .ytick text, .ztick text {
         fill: #000000 !important;
         font-weight: bold !important;
     }
-    
-    /* 7. 調整頂部間距 */
-    .block-container {
-        padding-top: 3rem !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D 智能裝箱系統 (專業版 V22)")
+st.title("📦 3D 智能裝箱系統 (專業版 V23)")
 st.markdown("---")
 
 # ==========================
@@ -121,7 +125,7 @@ with st.sidebar:
     box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
     
     st.markdown("---")
-    st.info("💡 若側邊欄收起了，請點擊左上角的黑色箭頭「>」展開。")
+    st.info("💡 側邊欄收起後，點擊左上角的「懸浮圓鈕 >」即可展開。")
     run_button = st.button("🔄 執行裝箱運算 (空間優化)", type="primary")
 
 # ==========================
