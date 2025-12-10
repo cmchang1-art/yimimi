@@ -98,9 +98,9 @@ with col_left:
         
         st.caption("外箱尺寸 (cm)")
         c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=30.0, step=1.0)
+        box_l = c1.number_input("長", value=35.0, step=1.0)
         box_w = c2.number_input("寬", value=25.0, step=1.0)
-        box_h = c3.number_input("高", value=15.0, step=1.0)
+        box_h = c3.number_input("高", value=20.0, step=1.0)
         
         box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
@@ -111,14 +111,14 @@ with col_right:
     shape_options = [
         "不變形", 
         "對折 (長度/2, 高度x2)", 
-        "L型彎折 (切成兩塊：底70%+側30%)"
+        "L型彎折 (靠邊擺放)"
     ]
 
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame(
             [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 3, "變形模式": "不變形"},
-                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "L型彎折 (切成兩塊：底70%+側30%)"},
+                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
+                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (靠邊擺放)"},
             ]
         )
 
@@ -186,27 +186,21 @@ if run_button:
                     requested_counts[name_origin] += qty
                     
                     for _ in range(qty):
-                        # === L型彎折邏輯 (改良：使用對折佔位，繪圖時再騙人) ===
-                        if mode == "L型彎折 (切成兩塊：底70%+側30%)":
-                            # 策略：我們告訴演算法，這是一個「對折」的東西
-                            # 讓演算法把它當作一個簡單的長方體處理，這樣絕對不會分屍
-                            # 關鍵在於：我們在名稱加上特殊標記 [L-SHAPE]
-                            l = l_origin * 0.7  # 底座長度
-                            w = w_origin        # 寬度不變
-                            h = h_origin * 50   # 我們故意把高度設高一點點(模擬佔用側邊空間)
-                                                # 或者簡單一點，我們就讓它佔用一個較大的方塊空間
-                                                # 但為了讓它好裝，我們先用「底座」的大小來佔位
+                        # === L型彎折邏輯 (虛擬牆策略) ===
+                        if mode == "L型彎折 (靠邊擺放)":
+                            # 策略：只將「底座」放入運算
+                            # 高度維持原本的薄度 (h_origin)，這樣其他東西可以疊在上面
+                            # 我們在名稱加上 [L-SHAPE] 標記，繪圖時再把它畫出來
                             
-                            # 修正策略：使用「底座」大小來進行運算，忽略側邊的微小厚度
-                            # 這樣保證能放得進去
-                            l_sim = l_origin * 0.7
-                            w_sim = w_origin
-                            h_sim = h_origin # 保持薄度
+                            l_pack = l_origin * 0.7  # 底座佔 70% 長度
+                            w_pack = w_origin        # 寬度不變
+                            h_pack = h_origin        # 維持薄度！這是關鍵，讓上方空間可利用
                             
-                            name = f"{name_origin}[L-SHAPE]" # 特殊標記！
+                            name = f"{name_origin}[L-SHAPE]"
                             
-                            # L型通常比較薄，可以晚點放，或隨意
-                            items_to_pack.append({'item': Item(name, l_sim, w_sim, h_sim, weight_origin), 'priority': 2})
+                            # 優先級設為 0 (最高！)，保證它先放入箱子
+                            # 根據演算法，先放入的物品會佔據 (0,0,0) 等角落位置，達到「靠邊」效果
+                            items_to_pack.append({'item': Item(name, l_pack, w_pack, h_pack, weight_origin), 'priority': 0})
 
                         # === 對折邏輯 ===
                         elif mode == "對折 (長度/2, 高度x2)":
@@ -217,12 +211,16 @@ if run_button:
                             
                         # === 預設邏輯 (不變形) ===
                         else:
-                            items_to_pack.append({'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 'priority': 1})
+                            # 一般商品優先級設為 2 (較晚放入)
+                            items_to_pack.append({'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 'priority': 2})
 
             except Exception as e:
                 pass
         
-        # 2. 依照優先級排序
+        # 2. 依照優先級排序 (Priority 0 -> 1 -> 2)
+        # Priority 0 (L型): 最先放 -> 鋪在底部靠邊
+        # Priority 1 (對折): 次之
+        # Priority 2 (一般): 最後放 -> 疊在上面
         items_to_pack.sort(key=lambda x: x['priority'])
 
         # 3. 加入包裝機
@@ -289,40 +287,40 @@ if run_button:
                 color = product_colors.get(base_name, '#888')
                 hover_text = f"{base_name}<br>尺寸: {idim_w}x{idim_d}x{idim_h}<br>位置:({x},{y},{z})"
 
-                # === 繪圖邏輯分岔 ===
+                # === 繪圖邏輯 ===
+                # 1. 畫底座 (所有物品都有)
+                fig.add_trace(go.Mesh3d(
+                    x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
+                    y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
+                    z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
+                    i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                    j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                    k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                    color=color, opacity=1, name=base_name, showlegend=True,
+                    text=hover_text, hoverinfo='text',
+                    lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
+                    lightposition=dict(x=1000, y=1000, z=2000)
+                ))
+
                 if is_l_shape:
-                    # 這裡就是魔法發生的位置！
-                    # 雖然運算時它是個扁方塊，但我們畫圖時把它畫成 L 型
-                    # 假設 item 佔據了底座的位置，我們手動長出側邊牆
+                    # 2. 如果是 L 型，額外畫出一道虛擬的「側牆」
+                    # 邏輯：在底座的其中一邊長出一道牆
+                    # 高度 = 原本長度的剩餘部分 (30%)
                     
-                    # 1. 畫底座 (Base) - 跟原本計算的一樣
-                    fig.add_trace(go.Mesh3d(
-                        x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
-                        y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
-                        z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
-                        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                        k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=color, opacity=1, name=base_name, showlegend=True,
-                        text=hover_text, hoverinfo='text'
-                    ))
+                    # 假設原始長度是透過 idim_w / 0.7 推算回來的 (粗略估計)
+                    original_l = idim_w / 0.7
+                    side_h = original_l * 0.3 
                     
-                    # 2. 畫側邊牆 (Side Wall) - 這是多畫出來的假象
-                    # 假設沿著「長邊」彎折
-                    # 側邊高度 = 原本長度 * 0.3 (剩下的30%)
-                    # 我們這裡偷懶，直接畫一個固定高度的側牆
-                    side_h = 10.0 # 假設側牆高 10cm
-                    wall_thick = 0.5 # 側牆厚度
+                    # 為了不擋到視覺，我們把牆畫薄一點
+                    wall_thick = 0.5 
                     
-                    # 側牆位置：在底座的末端長出來
-                    # 注意：這裡無法精確得知 item 是橫放還是直放，
-                    # 簡單起見，我們假設它沿著 X 軸放置 (idim_w)
-                    
+                    # 決定牆的位置：畫在底座的「後面」或「側面」
+                    # 這裡簡單處理：畫在 X 軸末端
                     sx = x + idim_w - wall_thick
                     sy = y
                     sz = z
                     
-                    # 畫一個薄牆
+                    # 繪製側牆 Mesh
                     fig.add_trace(go.Mesh3d(
                         x=[sx, sx+wall_thick, sx+wall_thick, sx, sx, sx+wall_thick, sx+wall_thick, sx],
                         y=[sy, sy, sy+idim_d, sy+idim_d, sy, sy, sy+idim_d, sy+idim_d],
@@ -330,10 +328,10 @@ if run_button:
                         i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
                         j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
                         k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=color, opacity=1, showlegend=False
+                        color=color, opacity=0.8, showlegend=False # 稍微透明一點，讓你看得到裡面
                     ))
                     
-                    # 畫側牆線框
+                    # 繪製側牆線框
                     fig.add_trace(go.Scatter3d(
                         x=[sx, sx+wall_thick, sx+wall_thick, sx, sx, sx, sx+wall_thick, sx+wall_thick, sx, sx, sx, sx, sx+wall_thick, sx+wall_thick, sx+wall_thick, sx+wall_thick],
                         y=[sy, sy, sy+idim_d, sy+idim_d, sy, sy, sy, sy, sy+idim_d, sy+idim_d, sy, sy+idim_d, sy+idim_d, sy, sy, sy+idim_d],
@@ -341,21 +339,6 @@ if run_button:
                         mode='lines', line=dict(color='#000000', width=2), showlegend=False
                     ))
 
-                else:
-                    # 一般物品正常畫
-                    fig.add_trace(go.Mesh3d(
-                        x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
-                        y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
-                        z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
-                        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                        k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=color, opacity=1, name=base_name, showlegend=True,
-                        text=hover_text, hoverinfo='text',
-                        lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
-                        lightposition=dict(x=1000, y=1000, z=2000)
-                    ))
-                
                 # 畫原本的線框 (共用)
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
