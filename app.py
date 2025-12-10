@@ -10,7 +10,7 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS (確保文字清晰)
+# CSS
 # ==========================
 st.markdown("""
 <style>
@@ -31,7 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D裝箱系統 (強制收納邏輯版)")
+st.title("📦 3D裝箱系統 (強制分層收納版)")
 st.markdown("---")
 
 # ==========================
@@ -51,12 +51,12 @@ with col_left:
 
 with col_right:
     st.markdown('### 2. 商品清單')
-    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (內襯墊底)"]
+    shape_options = ["不變形", "對折 (鋪底/靠邊)", "L型彎折 (內襯墊底)"]
     
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
-            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 3, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "對折 (長度/2, 高度x2)"}, 
+            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "對折 (鋪底/靠邊)"}, 
         ])
 
     edited_df = st.data_editor(
@@ -80,18 +80,23 @@ with b2:
 # 核心運算
 # ==========================
 if run_button:
-    with st.spinner('正在進行邏輯演算...'):
+    with st.spinner('正在執行強制分層運算...'):
         
-        # 1. 帳本初始化
-        ledger_request = {}   # 需求數量
-        ledger_packed = {}    # 實際裝箱數量 (絕對真理)
-        
-        packer_items = []     # 給演算法的
-        lining_data = None    # 手動繪製的L型
-        
+        # 1. 絕對帳本初始化
+        ledger_request = {}   # 客戶要幾個
+        ledger_packed = {}    # 實際裝了幾個
         total_net_weight = 0
         
-        # 2. 資料處理
+        # 分類清單
+        layer_bottom_items = [] # 強制鋪底 (紙袋)
+        layer_wall_items = []   # 強制貼牆 (L型牆面)
+        packer_items = []       # 給演算法的 (禮盒)
+        
+        # 空間扣除量
+        reserved_height = 0.0 # 底部被佔用的高度
+        reserved_width_x = 0.0 # 側面被佔用的寬度
+        
+        # 2. 資料前處理
         for index, row in edited_df.iterrows():
             try:
                 name = str(row["商品名稱"])
@@ -103,88 +108,74 @@ if run_button:
                 if qty > 0:
                     ledger_request[name] = ledger_request.get(name, 0) + qty
                     
-                    # === [A] L型內襯 (完全手動，不進 Packer) ===
-                    if mode == "L型彎折 (內襯墊底)":
-                        # 計算佔用空間
+                    # === 模式 A: 對折 (強制鋪底) ===
+                    if "對折" in mode:
+                        folded_l = l / 2
+                        folded_h = h * 2
+                        total_stack_h = folded_h * qty
+                        
+                        # 加入鋪底清單
+                        layer_bottom_items.append({
+                            'name': name, 'l': folded_l, 'w': w, 'h': folded_h, 'qty': qty,
+                            'stack_h': total_stack_h, 'weight': weight, 'type': 'folded'
+                        })
+                        # 增加底部佔用高度
+                        reserved_height += total_stack_h
+                        
+                        # 記入帳本 (因為我們是強制鋪底，視為已裝入)
+                        ledger_packed[name] = ledger_packed.get(name, 0) + qty
+                        total_net_weight += (weight * qty)
+
+                    # === 模式 B: L型 (強制內襯) ===
+                    elif "L型" in mode:
                         wall_t = h * qty
                         floor_t = h * qty
                         
-                        lining_data = {
+                        # 加入牆壁清單
+                        layer_wall_items.append({
                             'name': name, 'l': l, 'w': w, 'h': h, 'qty': qty,
-                            'off_x': wall_t, 'off_z': floor_t, 'vis_h': l * 0.3,
-                            'weight': weight
-                        }
+                            'wall_t': wall_t, 'floor_t': floor_t, 'weight': weight, 'type': 'L'
+                        })
+                        # 增加佔用空間
+                        reserved_width_x += wall_t
+                        reserved_height += floor_t
                         
-                        # 手動記入帳本 (修復報表錯誤)
+                        # 記入帳本
                         ledger_packed[name] = ledger_packed.get(name, 0) + qty
                         total_net_weight += (weight * qty)
                         
-                    # === [B] 對折 (強制綑綁，進 Packer) ===
-                    elif "對折" in mode:
-                        folded_l = l / 2
-                        folded_h = h * 2
-                        
-                        # 強制堆疊：把 qty 個疊成一個大方塊
-                        stack_h = folded_h * qty
-                        stack_weight = weight * qty
-                        
-                        # 建立一個 "Bundled Item"
-                        # Area 設為極大，保證最先放入角落
-                        packer_items.append({
-                            'item': Item(f"{name}(Bundle)", folded_l, w, stack_h, stack_weight),
-                            'area': 9999999, 
-                            'base_name': name, # 原始名稱
-                            'is_stack': True,
-                            'stack_qty': qty,
-                            'unit_h': folded_h
-                        })
-                        
-                    # === [C] 攤平/不變形 (底面積排序，進 Packer) ===
+                    # === 模式 C: 一般禮盒 (給演算法) ===
                     else:
-                        area = l * w 
-                        # 這裡選擇不綑綁，讓它們自然鋪底
                         for _ in range(qty):
                             packer_items.append({
                                 'item': Item(name, l, w, h, weight),
-                                'area': area,
-                                'base_name': name,
-                                'is_stack': False,
-                                'stack_qty': 1,
-                                'unit_h': h
+                                'base_name': name
                             })
                             
             except Exception as e:
                 pass
 
-        # 3. Packer 環境準備
+        # 3. 建立縮小的箱子 (演算法只能在剩下的空間玩)
         packer = Packer()
         
-        # 空間扣除 (L型專用)
-        offset_x = 0
-        offset_z = 0
-        if lining_data:
-            eff_l = box_l - lining_data['off_x']
-            eff_h = box_h - lining_data['off_z']
-            offset_x = lining_data['off_x']
-            offset_z = lining_data['off_z']
+        eff_l = box_l - reserved_width_x
+        eff_h = box_h - reserved_height
+        
+        # 保護機制
+        if eff_l <= 0 or eff_h <= 0:
+            st.error(f"❌ 錯誤：紙袋堆疊後厚度 ({reserved_height}cm) 或寬度 已超過箱子尺寸！")
+            st.stop()
             
-            if eff_l <= 0 or eff_h <= 0:
-                st.error("❌ 錯誤：內襯太厚，已佔滿箱子！")
-                st.stop()
-            bin_obj = Bin('Box', eff_l, box_w, eff_h, 999999)
-        else:
-            bin_obj = Bin('Box', box_l, box_w, box_h, 999999)
-            
+        # 建立「剩餘空間」箱子
+        # 注意：我們把箱子往上抬高 reserved_height，往右移 reserved_width_x
+        bin_obj = Bin('Box', eff_l, box_w, eff_h, 999999)
         packer.add_bin(bin_obj)
 
-        # 4. 排序與裝箱
-        # 綑綁包(Priority Max) -> 大底板 -> 小盒子
-        packer_items.sort(key=lambda x: x['area'], reverse=True)
-        
+        # 4. 裝入禮盒
         for p in packer_items:
             packer.add_item(p['item'])
             
-        packer.pack(bigger_first=False)
+        packer.pack(bigger_first=True)
 
         # ==========================
         # 繪圖
@@ -203,116 +194,112 @@ if run_button:
             mode='lines', line=dict(color='black', width=5), name='外箱', showlegend=True
         ))
 
-        # A. 畫 L 型內襯
-        if lining_data:
-            lname = lining_data['name']
-            lqty = lining_data['qty']
-            uh = lining_data['h']
-            lc = color_map.get(lname, '#888')
-            
-            for i in range(lqty):
-                # 底座
-                fz = i * uh
-                l_draw = min(lining_data['l'], box_l)
+        # --- A. 畫強制鋪底的物品 (對折 / L型底座) ---
+        current_z = 0.0
+        
+        # 先畫 L 型底座
+        for item in layer_wall_items:
+            c = color_map.get(item['name'], '#888')
+            for i in range(item['qty']):
+                # L型底座
+                fig.add_trace(go.Mesh3d(
+                    x=[0, box_l, box_l, 0, 0, box_l, box_l, 0], # 鋪滿長度
+                    y=[0, 0, item['w'], item['w'], 0, 0, item['w'], item['w']],
+                    z=[current_z, current_z, current_z, current_z, current_z+item['h'], current_z+item['h'], current_z+item['h'], current_z+item['h']],
+                    color=c, opacity=1, name=item['name'], showlegend=(i==0)
+                ))
+                # 黑框
+                fig.add_trace(go.Scatter3d(
+                    x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
+                    y=[0, 0, item['w'], item['w'], 0, 0, 0, 0, item['w'], item['w'], 0, item['w'], item['w'], item['w'], 0, 0],
+                    z=[current_z, current_z, current_z, current_z, current_z, current_z+item['h'], current_z+item['h'], current_z+item['h'], current_z+item['h'], current_z+item['h'], current_z, current_z+item['h'], current_z+item['h'], current_z+item['h'], current_z, current_z],
+                    mode='lines', line=dict(color='black', width=2), showlegend=False
+                ))
+                current_z += item['h']
                 
+            # 順便畫 L 型側牆 (堆疊在 X 軸)
+            current_x_wall = 0
+            for i in range(item['qty']):
+                vis_h = item['l'] * 0.3
                 fig.add_trace(go.Mesh3d(
-                    x=[0, l_draw, l_draw, 0, 0, l_draw, l_draw, 0],
-                    y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, lining_data['w'], lining_data['w']],
-                    z=[fz, fz, fz, fz, fz+uh, fz+uh, fz+uh, fz+uh],
-                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=lc, opacity=1, name=lname, showlegend=(i==0)
+                    x=[current_x_wall, current_x_wall+item['h'], current_x_wall+item['h'], current_x_wall, current_x_wall, current_x_wall+item['h'], current_x_wall+item['h'], current_x_wall],
+                    y=[0, 0, item['w'], item['w'], 0, 0, item['w'], item['w']],
+                    z=[0, 0, 0, 0, vis_h, vis_h, vis_h, vis_h],
+                    color=c, opacity=1, showlegend=False
                 ))
+                # 側牆框
                 fig.add_trace(go.Scatter3d(
-                    x=[0, l_draw, l_draw, 0, 0, 0, l_draw, l_draw, 0, 0, 0, 0, l_draw, l_draw, l_draw, l_draw],
-                    y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, 0, 0, lining_data['w'], lining_data['w'], 0, lining_data['w'], lining_data['w'], lining_data['w'], 0, 0],
-                    z=[fz, fz, fz, fz, fz, fz+uh, fz+uh, fz+uh, fz+uh, fz+uh, fz, fz+uh, fz+uh, fz+uh, fz, fz],
+                    x=[current_x_wall, current_x_wall+item['h'], current_x_wall+item['h'], current_x_wall, current_x_wall, current_x_wall, current_x_wall+item['h'], current_x_wall+item['h'], current_x_wall, current_x_wall, current_x_wall, current_x_wall, current_x_wall+item['h'], current_x_wall+item['h'], current_x_wall+item['h'], current_x_wall+item['h']],
+                    y=[0, 0, item['w'], item['w'], 0, 0, 0, 0, item['w'], item['w'], 0, item['w'], item['w'], item['w'], 0, 0],
+                    z=[0, 0, 0, 0, 0, vis_h, vis_h, vis_h, vis_h, vis_h, 0, vis_h, vis_h, vis_h, 0, 0],
                     mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
-                # 側牆
-                wx = i * uh
-                fig.add_trace(go.Mesh3d(
-                    x=[wx, wx+uh, wx+uh, wx, wx, wx+uh, wx+uh, wx],
-                    y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, lining_data['w'], lining_data['w']],
-                    z=[0, 0, 0, 0, lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h']],
-                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=lc, opacity=1, showlegend=False
-                ))
-                fig.add_trace(go.Scatter3d(
-                    x=[wx, wx+uh, wx+uh, wx, wx, wx, wx+uh, wx+uh, wx, wx, wx, wx, wx+uh, wx+uh, wx+uh, wx+uh],
-                    y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, 0, 0, lining_data['w'], lining_data['w'], 0, lining_data['w'], lining_data['w'], lining_data['w'], 0, 0],
-                    z=[0, 0, 0, 0, 0, lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], 0, lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], 0, 0],
-                    mode='lines', line=dict(color='black', width=2), showlegend=False
-                ))
+                current_x_wall += item['h']
 
-        # B. 畫 Packer 物品
+        # 再畫 對折紙袋 (堆疊在 L 型底座之上)
+        for item in layer_bottom_items:
+            c = color_map.get(item['name'], '#888')
+            # 必須把對折紙袋靠角落放 (X=0 或 X=reserved_width_x)
+            start_x = reserved_width_x
+            
+            for i in range(item['qty']):
+                unit_h = item['h'] # 對折後的高度
+                
+                # 繪製實體
+                fig.add_trace(go.Mesh3d(
+                    x=[start_x, start_x+item['l'], start_x+item['l'], start_x, start_x, start_x+item['l'], start_x+item['l'], start_x],
+                    y=[0, 0, item['w'], item['w'], 0, 0, item['w'], item['w']],
+                    z=[current_z, current_z, current_z, current_z, current_z+unit_h, current_z+unit_h, current_z+unit_h, current_z+unit_h],
+                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                    color=c, opacity=1, name=item['name'], showlegend=(i==0)
+                ))
+                # 繪製黑框
+                fig.add_trace(go.Scatter3d(
+                    x=[start_x, start_x+item['l'], start_x+item['l'], start_x, start_x, start_x, start_x+item['l'], start_x+item['l'], start_x, start_x, start_x, start_x, start_x+item['l'], start_x+item['l'], start_x+item['l'], start_x+item['l']],
+                    y=[0, 0, item['w'], item['w'], 0, 0, 0, 0, item['w'], item['w'], 0, item['w'], item['w'], item['w'], 0, 0],
+                    z=[current_z, current_z, current_z, current_z, current_z, current_z+unit_h, current_z+unit_h, current_z+unit_h, current_z+unit_h, current_z+unit_h, current_z, current_z+unit_h, current_z+unit_h, current_z+unit_h, current_z, current_z],
+                    mode='lines', line=dict(color='black', width=2), showlegend=False
+                ))
+                current_z += unit_h
+
+        # --- B. 畫 Packer 禮盒 (漂浮在堆疊層之上) ---
         total_vol = 0
-        packer_data_map = {p['item'].name: p for p in packer_items} 
-
+        
         for b in packer.bins:
             for item in b.items:
-                raw_name = item.name
-                base_name = raw_name.split('(')[0]
+                base_name = item.name
                 
-                p_data = packer_data_map.get(raw_name)
-                is_stack = p_data.get('is_stack', False) if p_data else False
-                stack_qty = p_data.get('stack_qty', 1) if p_data else 1
-                unit_h = p_data.get('unit_h', 0) if p_data else 0
-                
-                # 記入帳本 (修復報表錯誤)
-                ledger_packed[base_name] = ledger_packed.get(base_name, 0) + stack_qty
+                # 記入帳本
+                ledger_packed[base_name] = ledger_packed.get(base_name, 0) + 1
                 total_net_weight += float(item.weight)
                 
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
                 w, d, h = float(dim[0]), float(dim[1]), float(dim[2])
                 
-                # 座標偏移
-                fx, fy, fz = x + offset_x, y, z + offset_z
+                # 座標偏移：X 加上 L型牆厚，Z 加上 底部堆疊總高
+                fx = x + reserved_width_x
+                fy = y 
+                fz = z + reserved_height
+                
                 total_vol += (w * d * h)
-                pc = color_map.get(base_name, '#888')
+                c = color_map.get(base_name, '#888')
 
-                if is_stack:
-                    # 堆疊包
-                    fig.add_trace(go.Mesh3d(
-                        x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
-                        y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
-                        z=[fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h],
-                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=pc, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name} (堆疊x{stack_qty})"
-                    ))
-                    # 外框
-                    fig.add_trace(go.Scatter3d(
-                        x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
-                        y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
-                        z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
-                        mode='lines', line=dict(color='black', width=3), showlegend=False
-                    ))
-                    # 內部線
-                    for i in range(1, stack_qty):
-                        lz = fz + (i * unit_h)
-                        fig.add_trace(go.Scatter3d(
-                            x=[fx, fx+w, fx+w, fx, fx],
-                            y=[fy, fy, fy+d, fy+d, fy],
-                            z=[lz, lz, lz, lz, lz],
-                            mode='lines', line=dict(color='black', width=1), showlegend=False
-                        ))
-                else:
-                    # 一般
-                    fig.add_trace(go.Mesh3d(
-                        x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
-                        y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
-                        z=[fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h],
-                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=pc, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=base_name
-                    ))
-                    fig.add_trace(go.Scatter3d(
-                        x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
-                        y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
-                        z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
-                        mode='lines', line=dict(color='black', width=3), showlegend=False
-                    ))
+                fig.add_trace(go.Mesh3d(
+                    x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
+                    y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
+                    z=[fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h],
+                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                    color=c, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=base_name
+                ))
+                fig.add_trace(go.Scatter3d(
+                    x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
+                    y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
+                    z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
+                    mode='lines', line=dict(color='black', width=3), showlegend=False
+                ))
 
-        # 去重圖例
+        # 去重
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
@@ -334,12 +321,15 @@ if run_button:
             legend=dict(x=0, y=1, bgcolor="rgba(255,255,255,0.8)", borderwidth=1, font=dict(color="black"))
         )
 
-        # 5. 報表生成
+        # 5. 報表
         box_vol = box_l * box_w * box_h
+        # 內襯體積
         lining_vol = 0
-        if lining_data:
-            lining_vol = (lining_data['off_x'] * lining_data['w'] * lining_data['vis_h']) + \
-                         ((box_l - lining_data['off_x']) * lining_data['w'] * lining_data['off_z'])
+        for item in layer_bottom_items:
+            lining_vol += (item['l'] * item['w'] * item['stack_h'])
+        for item in layer_wall_items:
+            lining_vol += (item['l'] * item['w'] * item['floor_t']) # 底
+            lining_vol += (item['wall_t'] * item['w'] * (item['l']*0.3)) # 牆 (模擬高度)
         
         utilization = ((total_vol + lining_vol) / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
@@ -347,7 +337,6 @@ if run_button:
         all_fitted = True
         missing_html = ""
         
-        # 絕對真理比對
         for name, req in ledger_request.items():
             real = ledger_packed.get(name, 0)
             diff = req - real
