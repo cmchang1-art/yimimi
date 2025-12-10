@@ -69,12 +69,12 @@ with col_left:
 with col_right:
     st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
     
-    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (靠邊擺放)"]
+    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (強制貼牆+防穿透)"]
 
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
             {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (靠邊擺放)"},
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (強制貼牆+防穿透)"},
         ])
 
     edited_df = st.data_editor(
@@ -100,6 +100,7 @@ with b2:
 if run_button:
     with st.spinner('正在進行智慧裝箱運算...'):
         packer = Packer()
+        # 建立外箱
         box = Bin('StandardBox', box_l, box_w, box_h, 999999)
         packer.add_bin(box)
         
@@ -125,34 +126,64 @@ if run_button:
                     requested_counts[name_origin] += qty
                     
                     for _ in range(qty):
-                        # === L型彎折策略 ===
-                        if mode == "L型彎折 (靠邊擺放)":
-                            # 策略：不縮短長度！讓底座佔滿它需要的空間
-                            # 這樣它自然會延伸到箱子邊緣，不會卡在中間
-                            l_pack = l_origin 
-                            w_pack = w_origin
-                            h_pack = h_origin # 維持薄度，讓其他商品可疊在上面
+                        # === L型彎折策略 (實體物理分割法) ===
+                        if mode == "L型彎折 (強制貼牆+防穿透)":
+                            # 策略：將紙袋切成「背板(牆)」與「底座(地板)」兩個實體
+                            # 這樣其他禮盒就絕對不可能穿過去 (因為那裡有東西佔著)
                             
-                            # 加上特殊標記，讓繪圖層知道要畫虛擬牆
-                            name = f"{name_origin}[L-SHAPE]"
-                            items_to_pack.append({'item': Item(name, l_pack, w_pack, h_pack, weight_origin), 'priority': 0})
+                            # 1. 背板 (Wall)：極薄，但很高 (模擬豎起來的部分)
+                            wall_thick = 0.5 # 背板厚度
+                            h_wall_visual = 10.0 # 視覺高度 (假設豎起來這麼高)
+                            
+                            # Item A: 背板 (Wall)
+                            # 優先級 0 (最高)：強制演算法第一個放它 -> 必定在 (0,0,0) 貼牆位置
+                            name_wall = f"{name_origin}(背板)"
+                            items_to_pack.append({
+                                'item': Item(name_wall, wall_thick, w_origin, h_wall_visual, weight_origin * 0.3), 
+                                'priority': 0, # 最高優先級！
+                                'is_l_part': True,
+                                'base_name': name_origin
+                            })
+                            
+                            # 2. 底座 (Floor)：長度要扣掉背板厚度
+                            # Item B: 底座
+                            # 優先級 1 (次高)：緊接著背板放入 -> 必定在背板前方
+                            name_floor = f"{name_origin}(底座)"
+                            items_to_pack.append({
+                                'item': Item(name_floor, l_origin - wall_thick, w_origin, h_origin, weight_origin * 0.7), 
+                                'priority': 1, 
+                                'is_l_part': True,
+                                'base_name': name_origin
+                            })
 
                         # === 對折策略 ===
                         elif mode == "對折 (長度/2, 高度x2)":
-                            items_to_pack.append({'item': Item(f"{name_origin}(對折)", l_origin/2, w_origin, h_origin*2, weight_origin), 'priority': 1})
+                            items_to_pack.append({
+                                'item': Item(f"{name_origin}(對折)", l_origin/2, w_origin, h_origin*2, weight_origin), 
+                                'priority': 2,
+                                'is_l_part': False,
+                                'base_name': name_origin
+                            })
                         
                         # === 一般策略 ===
                         else:
-                            items_to_pack.append({'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 'priority': 2})
+                            items_to_pack.append({
+                                'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 
+                                'priority': 3, # 最晚放，讓它疊在紙袋上面
+                                'is_l_part': False,
+                                'base_name': name_origin
+                            })
             except: pass
         
-        # 2. 排序並裝箱
+        # 2. 排序並裝箱 (關鍵：Priority 0 先放 -> 貼牆)
         items_to_pack.sort(key=lambda x: x['priority'])
         for entry in items_to_pack: packer.add_item(entry['item'])
         
+        # 顏色分配
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
-        product_colors = {name.replace('[L-SHAPE]', ''): palette[i % len(palette)] for i, name in enumerate(unique_products)}
+        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
+        # 執行裝箱
         packer.pack(bigger_first=False) 
         
         # ==========================
@@ -171,28 +202,39 @@ if run_button:
         fig.add_trace(go.Scatter3d(x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l], y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w], z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0], mode='lines', line=dict(color='black', width=6), name='外箱'))
 
         total_vol = 0
-        packed_counts = {}
+        packed_counts_raw = {} # 記錄真實Item名稱
+        packed_counts_merged = {} # 記錄合併後的商品名稱(給報表用)
         
         for b in packer.bins:
             for item in b.items:
-                is_l_shape = "[L-SHAPE]" in item.name
-                base_name = item.name.replace('[L-SHAPE]', '')
-                packed_counts[base_name] = packed_counts.get(base_name, 0) + 1
+                # 取得乾淨的商品名稱 (去除 背板/底座 後綴)
+                raw_name = item.name
+                base_name = raw_name.split('(')[0]
                 
+                # 統計
+                packed_counts_raw[raw_name] = packed_counts_raw.get(raw_name, 0) + 1
+                
+                # 這裡做一個特殊的統計：如果是L型，我們只算「底座」的數量當作總數，避免重複計算
+                if "(背板)" not in raw_name: 
+                    packed_counts_merged[base_name] = packed_counts_merged.get(base_name, 0) + 1
+
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
-                w, d, h = float(dim[0]), float(dim[1]), float(dim[2]) # 實際裝箱長寬高
+                w, d, h = float(dim[0]), float(dim[1]), float(dim[2])
                 total_vol += (w * d * h)
                 total_net_weight += float(item.weight)
+                
                 color = product_colors.get(base_name, '#888')
 
-                # 畫底座 (實體)
+                # === 繪製實體方塊 (Mesh) ===
                 fig.add_trace(go.Mesh3d(
                     x=[x, x+w, x+w, x, x, x+w, x+w, x], y=[y, y, y+d, y+d, y, y, y+d, y+d], z=[z, z, z, z, z+h, z+h, z+h, z+h],
                     i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
                     color=color, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name}<br>Pos:({x},{y},{z})"
                 ))
-                # 畫底座線框 (確保數量可見)
+                
+                # === 繪製獨立黑色線框 (Wireframe) ===
+                # 這是解決「看起來黏在一起」的關鍵，每個 item 都有獨立的黑線
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+w, x+w, x, x, x, x+w, x+w, x, x, x, x, x+w, x+w, x+w, x+w],
                     y=[y, y, y+d, y+d, y, y, y, y, y+d, y+d, y, y+d, y+d, y, y, y+d],
@@ -200,35 +242,9 @@ if run_button:
                     mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
 
-                if is_l_shape:
-                    # === 虛擬牆繪製 (解決數量與位置問題) ===
-                    # 邏輯：在底座的「長邊」末端長出一道牆
-                    # 自動偵測哪邊是長邊 (因為 packer 可能會旋轉物品)
-                    
-                    wall_height = 8.0 # 預設側牆高度 (可調整)
-                    wall_thick = 0.5
-                    
-                    # 判斷方向：沿著長邊畫牆
-                    if w >= d: # X軸是長邊
-                        wx, wy, wz = x + w - wall_thick, y, z
-                        ww, wd, wh = wall_thick, d, wall_height
-                    else: # Y軸是長邊
-                        wx, wy, wz = x, y + d - wall_thick, z
-                        ww, wd, wh = w, wall_thick, wall_height
-                        
-                    # 畫虛擬牆 (Mesh)
-                    fig.add_trace(go.Mesh3d(
-                        x=[wx, wx+ww, wx+ww, wx, wx, wx+ww, wx+ww, wx], y=[wy, wy, wy+wd, wy+wd, wy, wy, wy+wd, wy+wd], z=[wz, wz, wz, wz, wz+wh, wz+wh, wz+wh, wz+wh],
-                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=color, opacity=0.8, showlegend=False
-                    ))
-                    # 畫虛擬牆線框 (關鍵！解決 5個變1個 的視覺問題)
-                    fig.add_trace(go.Scatter3d(
-                        x=[wx, wx+ww, wx+ww, wx, wx, wx, wx+ww, wx+ww, wx, wx, wx, wx, wx+ww, wx+ww, wx+ww, wx+ww],
-                        y=[wy, wy, wy+wd, wy+wd, wy, wy, wy, wy, wy+wd, wy+wd, wy, wy+wd, wy+wd, wy, wy, wy+wd],
-                        z=[wz, wz, wz, wz, wz, wz+wh, wz+wh, wz+wh, wz+wh, wz+wh, wz, wz+wh, wz+wh, wz+wh, wz, wz],
-                        mode='lines', line=dict(color='black', width=2), showlegend=False
-                    ))
+        # 去除圖例重複
+        names = set()
+        fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
         # 報表邏輯
         box_vol = box_l * box_w * box_h
@@ -238,7 +254,9 @@ if run_button:
         
         all_fitted, missing_html = True, ""
         for name, req in requested_counts.items():
-            diff = req - packed_counts.get(name, 0)
+            # 比對需求 vs 實際裝入 (使用合併後的計數)
+            real = packed_counts_merged.get(name, 0)
+            diff = req - real
             if diff > 0:
                 all_fitted = False
                 missing_html += f"<li style='color:red; background:#ffd2d2; padding:5px;'>⚠️ {name}: 遺漏 {diff} 個</li>"
