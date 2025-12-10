@@ -36,7 +36,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D裝箱系統 (L型物理堆疊修正版)")
+st.title("📦 3D裝箱系統 (L型實體堆疊終極版)")
 st.markdown("---")
 
 # ==========================
@@ -58,12 +58,12 @@ with col_left:
 with col_right:
     st.markdown('<div class="section-header">2. 商品清單</div>', unsafe_allow_html=True)
     
-    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (巢狀堆疊+防穿透)"]
+    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (強制堆疊+實體防穿透)"]
 
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
             {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (巢狀堆疊+防穿透)"},
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (強制堆疊+實體防穿透)"},
         ])
 
     edited_df = st.data_editor(
@@ -97,86 +97,104 @@ if run_button:
         total_net_weight = 0
         items_to_pack = []
 
-        # 1. 資料前處理與策略分配
+        # 1. 資料前處理：分類 L型 與 一般物品
+        l_shape_groups = {} # 用來暫存需要合併的 L型商品
+        normal_items = []
+
         for index, row in edited_df.iterrows():
             try:
-                name_origin = str(row["商品名稱"])
-                l_origin, w_origin, h_origin = float(row["長"]), float(row["寬"]), float(row["高"])
-                weight_origin = float(row["重量(kg)"])
-                qty, mode = int(row["數量"]), str(row["變形模式"])
+                name = str(row["商品名稱"])
+                l, w, h = float(row["長"]), float(row["寬"]), float(row["高"])
+                weight = float(row["重量(kg)"])
+                qty = int(row["數量"])
+                mode = str(row["變形模式"])
                 
                 if qty > 0:
-                    # 統計需求
-                    if name_origin not in requested_counts:
-                        requested_counts[name_origin] = 0
-                        unique_products.append(name_origin)
-                    requested_counts[name_origin] += qty
+                    if name not in requested_counts:
+                        requested_counts[name] = 0
+                        unique_products.append(name)
+                    requested_counts[name] += qty
+
+                    if mode == "L型彎折 (強制堆疊+實體防穿透)":
+                        # 收集起來，等一下合併成大積木
+                        if name not in l_shape_groups:
+                            l_shape_groups[name] = {
+                                'l': l, 'w': w, 'h': h, 'weight': weight, 'qty': 0
+                            }
+                        l_shape_groups[name]['qty'] += qty
                     
-                    # === L型核心策略：物理實體分割 + 堆疊 (Stacking) ===
-                    if mode == "L型彎折 (巢狀堆疊+防穿透)":
-                        # 我們將 所有數量 的紙袋，合併成「1組」堆疊好的實體
-                        # 這樣可以避免演算法把紙袋散得到處都是
-                        
-                        # 積木 A: 牆壁組 (Wall Stack)
-                        # 實體厚度 0.5cm，高度模擬 10cm
-                        wall_thick = 0.5
-                        wall_height = 10.0
-                        
-                        # Priority 0: 最高優先級 -> 強制先放 -> 必定貼牆
-                        items_to_pack.append({
-                            'item': Item(f"{name_origin}(WallStack)", wall_thick, w_origin, wall_height, weight_origin*0.1*qty),
-                            'priority': 0, 
-                            'base_name': name_origin,
-                            'stack_qty': qty, # 記錄這一塊代表幾個紙袋
-                            'is_stack': True
-                        })
-                        
-                        # 積木 B: 地板組 (Floor Stack)
-                        # 長度扣掉牆壁厚度，高度是所有紙袋疊起來的高度
-                        floor_height_total = h_origin * qty # 0.3 * 5 = 1.5cm
-                        
-                        # Priority 1: 第二順位 -> 必定鋪在牆壁前方底部
-                        items_to_pack.append({
-                            'item': Item(f"{name_origin}(FloorStack)", l_origin - wall_thick, w_origin, floor_height_total, weight_origin*0.9*qty),
-                            'priority': 1, 
-                            'base_name': name_origin,
-                            'stack_qty': qty,
-                            'is_stack': True
-                        })
-                        
-                    # === 對折策略 ===
                     elif "對折" in mode:
-                        for i in range(qty):
-                            items_to_pack.append({
-                                'item': Item(f"{name_origin}(Folded)", l_origin/2, w_origin, h_origin*2, weight_origin),
+                        for _ in range(qty):
+                            normal_items.append({
+                                'item': Item(f"{name}(Folded)", l/2, w, h*2, weight),
                                 'priority': 2,
-                                'base_name': name_origin,
-                                'stack_qty': 1,
+                                'base_name': name,
                                 'is_stack': False
                             })
-                    
-                    # === 一般策略 ===
                     else:
-                        for i in range(qty):
-                            # 一般商品最後放 (Priority 3)，讓它們利用 L 型留下的空間
-                            items_to_pack.append({
-                                'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin),
+                        for _ in range(qty):
+                            normal_items.append({
+                                'item': Item(name, l, w, h, weight),
                                 'priority': 3,
-                                'base_name': name_origin,
-                                'stack_qty': 1,
+                                'base_name': name,
                                 'is_stack': False
                             })
             except: pass
-        
-        # 2. 關鍵排序：Priority 0 (牆) -> 1 (地) -> 2 (其他)
+
+        # 2. 處理 L型合併 (關鍵修正：建立實體大積木)
+        for name, data in l_shape_groups.items():
+            total_qty = data['qty']
+            l_origin = data['l']
+            w_origin = data['w']
+            h_origin = data['h']
+            
+            # --- 建立實體積木 A: 牆壁堆疊 (Wall Stack) ---
+            # 假設側牆厚度 0.5cm，將所有數量的側牆疊在一起
+            # 總厚度 = 0.5 * total_qty (這是物理上真正存在的厚度，禮盒進不來)
+            # 高度設定為模擬高度 (例如10cm)
+            wall_unit_thick = 0.5
+            total_wall_thick = wall_unit_thick * total_qty 
+            visual_wall_height = 10.0 
+            
+            items_to_pack.append({
+                'item': Item(f"{name}(WallStack)", total_wall_thick, w_origin, visual_wall_height, data['weight']*0.1*total_qty),
+                'priority': 0, # 最高優先級，強制先放 -> 貼牆
+                'base_name': name,
+                'is_stack': True,
+                'stack_qty': total_qty, # 記住這裡有幾個，繪圖時要還原
+                'stack_type': 'wall',
+                'unit_dim': (wall_unit_thick, w_origin, visual_wall_height) # 單個尺寸供繪圖用
+            })
+
+            # --- 建立實體積木 B: 底座堆疊 (Floor Stack) ---
+            # 長度 = 原長 - 單個牆厚 (注意：不是減總牆厚，是減單個牆厚，因為是L型疊L型)
+            # 這裡我們做一個簡化：讓底座的長度固定，高度疊加
+            # 總高度 = 單個高 * total_qty
+            floor_len = l_origin - wall_unit_thick
+            total_floor_height = h_origin * total_qty
+            
+            items_to_pack.append({
+                'item': Item(f"{name}(FloorStack)", floor_len, w_origin, total_floor_height, data['weight']*0.9*total_qty),
+                'priority': 1, # 次高優先級，鋪在底下
+                'base_name': name,
+                'is_stack': True,
+                'stack_qty': total_qty,
+                'stack_type': 'floor',
+                'unit_dim': (floor_len, w_origin, h_origin)
+            })
+
+        # 將一般物品加入清單
+        items_to_pack.extend(normal_items)
+
+        # 3. 排序並裝箱
+        # 關鍵：Priority 0 (牆) -> 1 (地) -> 2,3 (其他)
+        # 這樣牆壁一定會在最外圍，地板鋪在底部，形成一個完美的 L 型凹槽
         items_to_pack.sort(key=lambda x: x['priority'])
         
-        # 3. 加入裝箱機
         for entry in items_to_pack:
             packer.add_item(entry['item'])
 
-        # 4. 執行裝箱 (bigger_first=False)
-        # 讓牆壁組先放入，確保佔據邊角
+        # 4. 執行裝箱
         packer.pack(bigger_first=False) 
         
         # ==========================
@@ -184,7 +202,6 @@ if run_button:
         # ==========================
         fig = go.Figure()
         
-        # 座標軸設定
         axis_config = dict(backgroundcolor="white", showbackground=True, zerolinecolor="black", gridcolor="#999999", linecolor="black", showgrid=True, showline=True, tickfont=dict(color="black"), title=dict(font=dict(color="black")))
         fig.update_layout(
             template="plotly_white", font=dict(color="black"), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -200,27 +217,28 @@ if run_button:
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
         total_vol = 0
-        packed_counts_merged = {} # 用來統計「真實」數量
-        
-        # 建立 item 對應的 stack_qty 映射 (因為 Packer 裡的 item 物件沒有 stack_qty 屬性)
-        item_stack_map = {entry['item'].name: entry['stack_qty'] for entry in items_to_pack}
-        
+        packed_counts_merged = {} 
+
+        # 建立快速查找表，找出 Packer item 對應的原始資料
+        # 因為 Packer item 物件本身沒有我們自訂的屬性，所以要用 name 來對應
+        item_data_map = {entry['item'].name: entry for entry in items_to_pack}
+
         for b in packer.bins:
             for item in b.items:
                 raw_name = item.name
-                # 從映射表找回原始 base_name 和 數量
-                # 這裡要小心名稱比對，我們用 startswith
-                stack_qty = 1
-                base_name = raw_name.split('(')[0]
+                entry_data = item_data_map.get(raw_name)
                 
-                # 找回 stack_qty
-                if raw_name in item_stack_map:
-                    stack_qty = item_stack_map[raw_name]
+                if not entry_data: continue
+
+                base_name = entry_data['base_name']
+                is_stack = entry_data.get('is_stack', False)
+                stack_qty = entry_data.get('stack_qty', 1)
                 
-                # 統計數量 (只統計非Wall的部分，避免重複，但要加上堆疊的數量)
-                if "(WallStack)" not in raw_name:
+                # 統計數量：只算地板 (Floor) 或 一般物品，避免牆壁重複計算
+                if "WallStack" not in raw_name:
                     packed_counts_merged[base_name] = packed_counts_merged.get(base_name, 0) + stack_qty
-                
+
+                # 取得位置與尺寸
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
                 w, d, h = float(dim[0]), float(dim[1]), float(dim[2])
@@ -228,35 +246,60 @@ if run_button:
                 total_vol += (w * d * h)
                 total_net_weight += float(item.weight)
                 color = product_colors.get(base_name, '#888')
-                
-                # === 繪圖 ===
-                # 1. 實體 Mesh
-                fig.add_trace(go.Mesh3d(
-                    x=[x, x+w, x+w, x, x, x+w, x+w, x], y=[y, y, y+d, y+d, y, y, y+d, y+d], z=[z, z, z, z, z+h, z+h, z+h, z+h],
-                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=color, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name}<br>Pos:({x},{y},{z})<br>Size:{w}x{d}x{h}"
-                ))
-                
-                # 2. 邊框線
-                fig.add_trace(go.Scatter3d(
-                    x=[x, x+w, x+w, x, x, x, x+w, x+w, x, x, x, x, x+w, x+w, x+w, x+w],
-                    y=[y, y, y+d, y+d, y, y, y, y, y+d, y+d, y, y+d, y+d, y, y, y+d],
-                    z=[z, z, z, z, z, z+h, z+h, z+h, z+h, z+h, z, z+h, z+h, z+h, z, z],
-                    mode='lines', line=dict(color='black', width=3), showlegend=False
-                ))
 
-                # 3. 如果是堆疊物件，畫出內部分隔線 (Visual Trick)
-                if stack_qty > 1:
-                    # 畫出每一層的線條
-                    single_h = h / stack_qty
-                    for i in range(1, stack_qty):
-                        level_z = z + single_h * i
-                        fig.add_trace(go.Scatter3d(
-                            x=[x, x+w, x+w, x, x],
-                            y=[y, y, y+d, y+d, y],
-                            z=[level_z, level_z, level_z, level_z, level_z],
-                            mode='lines', line=dict(color='black', width=1), showlegend=False
+                # === 繪圖邏輯修正 ===
+                
+                if is_stack:
+                    # 如果是堆疊物件，我們要「還原」畫出 N 個分身，而不是畫一個大積木
+                    # 這樣才能在視覺上看到 5 個，而不是 1 個
+                    
+                    stack_type = entry_data.get('stack_type')
+                    unit_w, unit_d, unit_h = entry_data.get('unit_dim')
+                    
+                    for i in range(stack_qty):
+                        # 計算每個分身的位移
+                        if stack_type == 'wall':
+                            # 牆壁是沿著 X 軸(厚度方向)堆疊
+                            sub_x = x + (unit_w * i)
+                            sub_y, sub_z = y, z
+                            sub_dim_w, sub_dim_d, sub_dim_h = unit_w, unit_d, unit_h
+                        else:
+                            # 地板是沿著 Z 軸(高度方向)堆疊
+                            sub_x, sub_y = x, y
+                            sub_z = z + (unit_h * i)
+                            sub_dim_w, sub_dim_d, sub_dim_h = unit_w, unit_d, unit_h
+                        
+                        # 畫分身 Mesh
+                        fig.add_trace(go.Mesh3d(
+                            x=[sub_x, sub_x+sub_dim_w, sub_x+sub_dim_w, sub_x, sub_x, sub_x+sub_dim_w, sub_x+sub_dim_w, sub_x],
+                            y=[sub_y, sub_y, sub_y+sub_dim_d, sub_y+sub_dim_d, sub_y, sub_y, sub_y+sub_dim_d, sub_y+sub_dim_d],
+                            z=[sub_z, sub_z, sub_z, sub_z, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z+sub_dim_h],
+                            i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                            color=color, opacity=1, name=base_name, showlegend=(i==0), hoverinfo='text', 
+                            text=f"{base_name} ({i+1}/{stack_qty})"
                         ))
+                        
+                        # 畫分身線框 (這就是讓你看得清楚數量的關鍵)
+                        fig.add_trace(go.Scatter3d(
+                            x=[sub_x, sub_x+sub_dim_w, sub_x+sub_dim_w, sub_x, sub_x, sub_x, sub_x+sub_dim_w, sub_x+sub_dim_w, sub_x, sub_x, sub_x, sub_x, sub_x+sub_dim_w, sub_x+sub_dim_w, sub_x+sub_dim_w, sub_x+sub_dim_w],
+                            y=[sub_y, sub_y, sub_y+sub_dim_d, sub_y+sub_dim_d, sub_y, sub_y, sub_y, sub_y, sub_y+sub_dim_d, sub_y+sub_dim_d, sub_y, sub_y+sub_dim_d, sub_y+sub_dim_d, sub_y, sub_y, sub_y+sub_dim_d],
+                            z=[sub_z, sub_z, sub_z, sub_z, sub_z, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z+sub_dim_h, sub_z, sub_z],
+                            mode='lines', line=dict(color='black', width=2), showlegend=False
+                        ))
+
+                else:
+                    # 一般物品正常繪製
+                    fig.add_trace(go.Mesh3d(
+                        x=[x, x+w, x+w, x, x, x+w, x+w, x], y=[y, y, y+d, y+d, y, y, y+d, y+d], z=[z, z, z, z, z+h, z+h, z+h, z+h],
+                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=color, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name}<br>Pos:({x},{y},{z})"
+                    ))
+                    fig.add_trace(go.Scatter3d(
+                        x=[x, x+w, x+w, x, x, x, x+w, x+w, x, x, x, x, x+w, x+w, x+w, x+w],
+                        y=[y, y, y+d, y+d, y, y, y, y, y+d, y+d, y, y+d, y+d, y, y, y+d],
+                        z=[z, z, z, z, z, z+h, z+h, z+h, z+h, z+h, z, z+h, z+h, z+h, z, z],
+                        mode='lines', line=dict(color='black', width=3), showlegend=False
+                    ))
 
         # 去除圖例重複
         names = set()
