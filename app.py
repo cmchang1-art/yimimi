@@ -10,18 +10,12 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：強制介面修復
+# CSS 樣式優化
 # ==========================
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff !important; color: #000000 !important; }
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="stSidebarCollapsedControl"] { display: none !important; }
-    [data-testid="stDecoration"] { display: none !important; }
-    .stDeployButton { display: none !important; }
-    footer { display: none !important; }
-    #MainMenu { display: none !important; }
-    [data-testid="stToolbar"] { display: none !important; }
+    [data-testid="stSidebar"], [data-testid="stDecoration"], .stDeployButton, footer, #MainMenu, [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
     
     div[data-baseweb="input"] input, div[data-baseweb="select"] div, .stDataFrame, .stTable {
@@ -29,29 +23,24 @@ st.markdown("""
     }
     
     .section-header {
-        font-size: 1.2rem; font-weight: bold; color: #333;
-        margin-top: 10px; margin-bottom: 5px;
+        font-size: 1.2rem; font-weight: bold; color: #333; margin-top: 10px; margin-bottom: 5px;
         border-left: 5px solid #FF4B4B; padding-left: 10px;
     }
 
     .report-card {
-        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
         padding: 20px; border: 2px solid #e0e0e0; border-radius: 10px; 
-        background: #ffffff; color: #333333; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px;
+        background: #ffffff; color: #333333; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px;
     }
     
-    .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
-    .xtick text, .ytick text, .ztick text { fill: #000000 !important; font-weight: bold !important; }
-    .block-container { padding-top: 2rem !important; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+    .block-container { padding-top: 2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D裝箱系統")
+st.title("📦 3D裝箱系統 (L型物理堆疊修正版)")
 st.markdown("---")
 
 # ==========================
-# 上半部：輸入區域
+# 輸入區域
 # ==========================
 col_left, col_right = st.columns([1, 2], gap="large")
 
@@ -67,14 +56,14 @@ with col_left:
         box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
 with col_right:
-    st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">2. 商品清單</div>', unsafe_allow_html=True)
     
-    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (強制貼牆+實體佔位)"]
+    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (巢狀堆疊+防穿透)"]
 
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
             {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (強制貼牆+實體佔位)"},
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (巢狀堆疊+防穿透)"},
         ])
 
     edited_df = st.data_editor(
@@ -85,7 +74,7 @@ with col_right:
             "寬": st.column_config.NumberColumn(format="%.1f"),
             "高": st.column_config.NumberColumn(format="%.1f"),
             "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-            "變形模式": st.column_config.SelectboxColumn(label="📦 裝箱變形策略", width="medium", options=shape_options, required=True)
+            "變形模式": st.column_config.SelectboxColumn(label="變形策略", width="medium", options=shape_options, required=True)
         }
     )
 
@@ -95,22 +84,20 @@ with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
 
 # ==========================
-# 下半部：運算邏輯
+# 核心運算邏輯
 # ==========================
 if run_button:
-    with st.spinner('正在進行智慧裝箱運算...'):
+    with st.spinner('正在進行物理堆疊模擬...'):
         packer = Packer()
-        # 建立外箱
         box = Bin('StandardBox', box_l, box_w, box_h, 999999)
         packer.add_bin(box)
         
         requested_counts = {}
         unique_products = []
-        total_qty = 0
         total_net_weight = 0
         items_to_pack = []
 
-        # 1. 準備資料與策略
+        # 1. 資料前處理與策略分配
         for index, row in edited_df.iterrows():
             try:
                 name_origin = str(row["商品名稱"])
@@ -119,72 +106,73 @@ if run_button:
                 qty, mode = int(row["數量"]), str(row["變形模式"])
                 
                 if qty > 0:
-                    total_qty += qty
+                    # 統計需求
                     if name_origin not in requested_counts:
                         requested_counts[name_origin] = 0
                         unique_products.append(name_origin)
                     requested_counts[name_origin] += qty
                     
-                    for _ in range(qty):
-                        # === L型彎折策略 (實體物理分割 + 防止旋轉亂跑) ===
-                        if mode == "L型彎折 (強制貼牆+實體佔位)":
-                            # 為了不讓演算法亂轉成凹字型，我們採用「主從式分割」
+                    for i in range(qty):
+                        # === L型核心策略：物理實體分割 ===
+                        if mode == "L型彎折 (巢狀堆疊+防穿透)":
+                            # 我們將 L 型拆成兩個「實體積木」，讓演算法真的去擺放它們
+                            # 這樣絕對不會有「穿模」問題，因為那裡真的有東西
                             
-                            # 1. 實體背板 (Wall)：0.5cm厚，高度模擬為10cm
-                            # 我們給它一個很窄的長度，讓它只能靠邊放
-                            wall_thick = 0.5 
-                            h_wall_visual = 10.0 
-                            
-                            name_wall = f"{name_origin}(背板)"
-                            # Priority 0: 最高優先級，必須先放
+                            # 積木 A: 牆壁 (Wall)
+                            # 設定一個實體厚度，例如 0.5cm。高度設為模擬高度(例如10cm)
+                            # Priority 0: 強制最先放入 -> 必定貼牆
+                            wall_thick = 0.5
+                            wall_height = 10.0
                             items_to_pack.append({
-                                'item': Item(name_wall, wall_thick, w_origin, h_wall_visual, weight_origin * 0.1), 
-                                'priority': 0 
+                                'item': Item(f"{name_origin}(Wall)", wall_thick, w_origin, wall_height, weight_origin*0.1),
+                                'priority': 0, # 最高優先級
+                                'base_name': name_origin
                             })
                             
-                            # 2. 實體底座 (Floor)：長度略短於原長度
-                            # Priority 1: 緊接著放
-                            name_floor = f"{name_origin}(底座)"
+                            # 積木 B: 地板 (Floor)
+                            # 長度要扣掉牆壁的厚度
+                            # Priority 1: 第二順位 -> 必定鋪在底部
                             items_to_pack.append({
-                                'item': Item(name_floor, l_origin - wall_thick, w_origin, h_origin, weight_origin * 0.9), 
-                                'priority': 1
+                                'item': Item(f"{name_origin}(Floor)", l_origin - wall_thick, w_origin, h_origin, weight_origin*0.9),
+                                'priority': 1, # 次高優先級
+                                'base_name': name_origin
                             })
-
+                            
                         # === 對折策略 ===
-                        elif mode == "對折 (長度/2, 高度x2)":
+                        elif "對折" in mode:
                             items_to_pack.append({
-                                'item': Item(f"{name_origin}(對折)", l_origin/2, w_origin, h_origin*2, weight_origin), 
-                                'priority': 2
+                                'item': Item(f"{name_origin}(Folded)", l_origin/2, w_origin, h_origin*2, weight_origin),
+                                'priority': 2,
+                                'base_name': name_origin
                             })
                         
                         # === 一般策略 ===
                         else:
-                            # 一般商品晚點放，避免佔用L型的位置
+                            # 一般商品最後放 (Priority 3)，這樣它們會填入 L 型留下的凹槽
                             items_to_pack.append({
-                                'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 
-                                'priority': 10 
+                                'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin),
+                                'priority': 3,
+                                'base_name': name_origin
                             })
             except: pass
         
-        # 2. 排序並裝箱 (關鍵：Priority 0 先放 -> 貼牆)
-        # 我們使用 priority 進行排序，確保 L 型的牆壁部分最先被處理
+        # 2. 關鍵排序：Priority 0 (牆) -> 1 (地) -> 2 (對折) -> 3 (一般)
         items_to_pack.sort(key=lambda x: x['priority'])
-        for entry in items_to_pack: packer.add_item(entry['item'])
         
-        # 顏色分配
-        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
-        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+        # 3. 加入裝箱機
+        for entry in items_to_pack:
+            packer.add_item(entry['item'])
 
-        # 執行裝箱 
-        # bigger_first=False 代表「小東西先放」。
-        # 因為我們的牆壁(0.5cm)很小，所以這能確保它先被塞進角落
+        # 4. 執行裝箱 (bigger_first=False)
+        # 讓小的、薄的(牆壁)先去佔位，這樣可以確保它們靠邊
         packer.pack(bigger_first=False) 
         
         # ==========================
-        # 3D 繪圖層
+        # 視覺化與報表
         # ==========================
         fig = go.Figure()
         
+        # 座標軸設定
         axis_config = dict(backgroundcolor="white", showbackground=True, zerolinecolor="black", gridcolor="#999999", linecolor="black", showgrid=True, showline=True, tickfont=dict(color="black"), title=dict(font=dict(color="black")))
         fig.update_layout(
             template="plotly_white", font=dict(color="black"), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -195,42 +183,42 @@ if run_button:
         # 畫外箱
         fig.add_trace(go.Scatter3d(x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l], y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w], z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0], mode='lines', line=dict(color='black', width=6), name='外箱'))
 
+        # 顏色
+        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
+        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+
         total_vol = 0
-        packed_counts_merged = {} 
+        packed_counts_merged = {} # 用來統計「真實」數量 (過濾掉分身)
         
-        # 遍歷裝箱結果
         for b in packer.bins:
             for item in b.items:
+                # 解析原始名稱
                 raw_name = item.name
+                # 我們從 items_to_pack 查找原始 base_name，或者直接字串處理
                 base_name = raw_name.split('(')[0]
                 
-                # 統計數量 (排除背板，避免重複計算)
-                if "(背板)" not in raw_name: 
+                # 統計邏輯修正：只統計「Floor」或「非Wall」的部分
+                # 這樣 5個牆 + 5個地，只會算成 5個商品
+                if "(Wall)" not in raw_name:
                     packed_counts_merged[base_name] = packed_counts_merged.get(base_name, 0) + 1
-
+                
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
                 w, d, h = float(dim[0]), float(dim[1]), float(dim[2])
+                
                 total_vol += (w * d * h)
                 total_net_weight += float(item.weight)
-                
                 color = product_colors.get(base_name, '#888')
-
-                # 若是背板，稍微加深顏色以利區分
-                if "(背板)" in raw_name:
-                    display_opacity = 0.9
-                else:
-                    display_opacity = 1.0
-
-                # === 1. 繪製實體方塊 (Mesh) ===
+                
+                # === 繪圖 ===
+                # 1. 實體 Mesh
                 fig.add_trace(go.Mesh3d(
                     x=[x, x+w, x+w, x, x, x+w, x+w, x], y=[y, y, y+d, y+d, y, y, y+d, y+d], z=[z, z, z, z, z+h, z+h, z+h, z+h],
                     i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=color, opacity=display_opacity, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name}<br>Pos:({x},{y},{z})"
+                    color=color, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name}<br>Pos:({x},{y},{z})<br>Size:{w}x{d}x{h}"
                 ))
                 
-                # === 2. 強制繪製獨立黑色線框 (解決數量視覺沾黏問題) ===
-                # 每一個 item，無論是否堆疊，都畫上框線
+                # 2. 獨立黑框 (解決黏在一起看不清數量的問題)
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+w, x+w, x, x, x, x+w, x+w, x, x, x, x, x+w, x+w, x+w, x+w],
                     y=[y, y, y+d, y+d, y, y, y, y, y+d, y+d, y, y+d, y+d, y, y, y+d],
@@ -242,7 +230,7 @@ if run_button:
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
-        # 報表邏輯
+        # 報表生成
         box_vol = box_l * box_w * box_h
         utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
