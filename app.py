@@ -10,409 +10,248 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：強制介面修復 (完全保留原版)
+# CSS：強制介面修復
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定：強制白底黑字 */
-    .stApp {
-        background-color: #ffffff !important;
-        color: #000000 !important;
-    }
-    
-    /* 2. 徹底隱藏側邊欄與相關按鈕 */
+    .stApp { background-color: #ffffff !important; color: #000000 !important; }
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="stSidebarCollapsedControl"] { display: none !important; }
-    
-    /* 3. 隱藏官方雜訊 */
     [data-testid="stDecoration"] { display: none !important; }
     .stDeployButton { display: none !important; }
     footer { display: none !important; }
     #MainMenu { display: none !important; }
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
-
-    /* 4. 輸入框優化 */
-    div[data-baseweb="input"] input,
-    div[data-baseweb="select"] div,
-    .stDataFrame, .stTable {
-        color: #000000 !important;
-        background-color: #f9f9f9 !important;
-        border-color: #cccccc !important;
+    
+    div[data-baseweb="input"] input, div[data-baseweb="select"] div, .stDataFrame, .stTable {
+        color: #000000 !important; background-color: #f9f9f9 !important; border-color: #cccccc !important;
     }
     
-    /* 5. 區塊標題優化 */
     .section-header {
-        font-size: 1.2rem;
-        font-weight: bold;
-        color: #333;
-        margin-top: 10px;
-        margin-bottom: 5px;
-        border-left: 5px solid #FF4B4B;
-        padding-left: 10px;
+        font-size: 1.2rem; font-weight: bold; color: #333;
+        margin-top: 10px; margin-bottom: 5px;
+        border-left: 5px solid #FF4B4B; padding-left: 10px;
     }
 
-    /* 6. 報表卡片樣式 */
     .report-card {
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
-        padding: 20px; 
-        border: 2px solid #e0e0e0; 
-        border-radius: 10px; 
-        background: #ffffff; 
-        color: #333333; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
+        padding: 20px; border: 2px solid #e0e0e0; border-radius: 10px; 
+        background: #ffffff; color: #333333; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px;
     }
     
-    /* 7. 圖表樣式 */
     .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
-    .xtick text, .ytick text, .ztick text {
-        fill: #000000 !important;
-        font-weight: bold !important;
-    }
-    
-    /* 8. 調整頂部間距 */
-    .block-container {
-        padding-top: 2rem !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
+    .xtick text, .ytick text, .ztick text { fill: #000000 !important; font-weight: bold !important; }
+    .block-container { padding-top: 2rem !important; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# 修改標題
 st.title("📦 3D裝箱系統")
 st.markdown("---")
 
 # ==========================
 # 上半部：輸入區域
 # ==========================
-
 col_left, col_right = st.columns([1, 2], gap="large")
 
 with col_left:
     st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
-    
     with st.container():
         order_name = st.text_input("訂單名稱", value="訂單_20241208")
-        
         st.caption("外箱尺寸 (cm)")
         c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=35.0, step=1.0)
+        box_l = c1.number_input("長", value=30.0, step=1.0)
         box_w = c2.number_input("寬", value=25.0, step=1.0)
-        box_h = c3.number_input("高", value=20.0, step=1.0)
-        
+        box_h = c3.number_input("高", value=15.0, step=1.0)
         box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
 with col_right:
     st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
     
-    # 定義變形選項
-    shape_options = [
-        "不變形", 
-        "對折 (長度/2, 高度x2)", 
-        "L型彎折 (靠邊擺放)"
-    ]
+    shape_options = ["不變形", "對折 (長度/2, 高度x2)", "L型彎折 (靠邊擺放)"]
 
     if 'df' not in st.session_state:
-        st.session_state.df = pd.DataFrame(
-            [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
-                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (靠邊擺放)"},
-            ]
-        )
+        st.session_state.df = pd.DataFrame([
+            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (靠邊擺放)"},
+        ])
 
     edited_df = st.data_editor(
-        st.session_state.df,
-        num_rows="dynamic",
-        use_container_width=True,
-        height=280,
+        st.session_state.df, num_rows="dynamic", use_container_width=True, height=280,
         column_config={
             "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
             "長": st.column_config.NumberColumn(format="%.1f"),
             "寬": st.column_config.NumberColumn(format="%.1f"),
             "高": st.column_config.NumberColumn(format="%.1f"),
             "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-            "變形模式": st.column_config.SelectboxColumn(
-                label="📦 裝箱變形策略",
-                width="medium",
-                options=shape_options,
-                help="選擇此商品放入箱中時的物理狀態",
-                required=True
-            )
+            "變形模式": st.column_config.SelectboxColumn(label="📦 裝箱變形策略", width="medium", options=shape_options, required=True)
         }
     )
 
 st.markdown("---")
-
 b1, b2, b3 = st.columns([1, 2, 1])
 with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
 
 # ==========================
-# 下半部：運算邏輯與結果
+# 下半部：運算邏輯
 # ==========================
 if run_button:
     with st.spinner('正在進行智慧裝箱運算...'):
-        max_weight_limit = 999999
         packer = Packer()
-        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
+        box = Bin('StandardBox', box_l, box_w, box_h, 999999)
         packer.add_bin(box)
         
         requested_counts = {}
         unique_products = []
         total_qty = 0
         total_net_weight = 0
-        
         items_to_pack = []
 
-        # 1. 準備資料
+        # 1. 準備資料與策略
         for index, row in edited_df.iterrows():
             try:
                 name_origin = str(row["商品名稱"])
-                l_origin = float(row["長"])
-                w_origin = float(row["寬"])
-                h_origin = float(row["高"])
+                l_origin, w_origin, h_origin = float(row["長"]), float(row["寬"]), float(row["高"])
                 weight_origin = float(row["重量(kg)"])
-                qty = int(row["數量"])
-                mode = str(row["變形模式"])
+                qty, mode = int(row["數量"]), str(row["變形模式"])
                 
                 if qty > 0:
                     total_qty += qty
-                    
                     if name_origin not in requested_counts:
                         requested_counts[name_origin] = 0
                         unique_products.append(name_origin)
                     requested_counts[name_origin] += qty
                     
                     for _ in range(qty):
-                        # === L型彎折邏輯 (虛擬牆策略) ===
+                        # === L型彎折策略 ===
                         if mode == "L型彎折 (靠邊擺放)":
-                            # 策略：只將「底座」放入運算
-                            # 高度維持原本的薄度 (h_origin)，這樣其他東西可以疊在上面
-                            # 我們在名稱加上 [L-SHAPE] 標記，繪圖時再把它畫出來
+                            # 策略：不縮短長度！讓底座佔滿它需要的空間
+                            # 這樣它自然會延伸到箱子邊緣，不會卡在中間
+                            l_pack = l_origin 
+                            w_pack = w_origin
+                            h_pack = h_origin # 維持薄度，讓其他商品可疊在上面
                             
-                            l_pack = l_origin * 0.7  # 底座佔 70% 長度
-                            w_pack = w_origin        # 寬度不變
-                            h_pack = h_origin        # 維持薄度！這是關鍵，讓上方空間可利用
-                            
+                            # 加上特殊標記，讓繪圖層知道要畫虛擬牆
                             name = f"{name_origin}[L-SHAPE]"
-                            
-                            # 優先級設為 0 (最高！)，保證它先放入箱子
-                            # 根據演算法，先放入的物品會佔據 (0,0,0) 等角落位置，達到「靠邊」效果
                             items_to_pack.append({'item': Item(name, l_pack, w_pack, h_pack, weight_origin), 'priority': 0})
 
-                        # === 對折邏輯 ===
+                        # === 對折策略 ===
                         elif mode == "對折 (長度/2, 高度x2)":
-                            l = l_origin / 2
-                            h = h_origin * 2
-                            name = f"{name_origin}(對折)"
-                            items_to_pack.append({'item': Item(name, l, w_origin, h, weight_origin), 'priority': 1})
-                            
-                        # === 預設邏輯 (不變形) ===
+                            items_to_pack.append({'item': Item(f"{name_origin}(對折)", l_origin/2, w_origin, h_origin*2, weight_origin), 'priority': 1})
+                        
+                        # === 一般策略 ===
                         else:
-                            # 一般商品優先級設為 2 (較晚放入)
                             items_to_pack.append({'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 'priority': 2})
-
-            except Exception as e:
-                pass
+            except: pass
         
-        # 2. 依照優先級排序 (Priority 0 -> 1 -> 2)
-        # Priority 0 (L型): 最先放 -> 鋪在底部靠邊
-        # Priority 1 (對折): 次之
-        # Priority 2 (一般): 最後放 -> 疊在上面
+        # 2. 排序並裝箱
         items_to_pack.sort(key=lambda x: x['priority'])
-
-        # 3. 加入包裝機
-        for entry in items_to_pack:
-            packer.add_item(entry['item'])
-
-        # 顏色設定
+        for entry in items_to_pack: packer.add_item(entry['item'])
+        
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name.replace('[L-SHAPE]', ''): palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # 4. 執行裝箱
         packer.pack(bigger_first=False) 
         
+        # ==========================
+        # 3D 繪圖層
+        # ==========================
         fig = go.Figure()
         
-        # 座標軸與 Layout 設定
-        axis_config = dict(
-            backgroundcolor="white", showbackground=True, zerolinecolor="#000000",
-            gridcolor="#999999", linecolor="#000000", showgrid=True, showline=True,
-            tickfont=dict(color="black", size=12, family="Arial Black"),
-            title=dict(font=dict(color="black", size=14, family="Arial Black"))
-        )
-        
+        axis_config = dict(backgroundcolor="white", showbackground=True, zerolinecolor="black", gridcolor="#999999", linecolor="black", showgrid=True, showline=True, tickfont=dict(color="black"), title=dict(font=dict(color="black")))
         fig.update_layout(
-            template="plotly_white", font=dict(color="black"),
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', autosize=True, 
-            scene=dict(
-                xaxis={**axis_config, 'title': '長 (L)'},
-                yaxis={**axis_config, 'title': '寬 (W)'},
-                zaxis={**axis_config, 'title': '高 (H)'},
-                aspectmode='data',
-                camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
-            ),
-            margin=dict(t=30, b=0, l=0, r=0), height=600,
-            legend=dict(x=0, y=1, xanchor="left", yanchor="top", font=dict(color="black", size=13), bgcolor="rgba(255,255,255,0.8)", bordercolor="#000000", borderwidth=1)
+            template="plotly_white", font=dict(color="black"), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            scene=dict(xaxis={**axis_config, 'title':'長(L)'}, yaxis={**axis_config, 'title':'寬(W)'}, zaxis={**axis_config, 'title':'高(H)'}, aspectmode='data', camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))),
+            margin=dict(t=30, b=0, l=0, r=0), height=600, legend=dict(x=0, y=1, bgcolor="rgba(255,255,255,0.8)", borderwidth=1)
         )
 
         # 畫外箱
-        fig.add_trace(go.Scatter3d(
-            x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
-            y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
-            z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='#000000', width=6), name='外箱'
-        ))
+        fig.add_trace(go.Scatter3d(x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l], y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w], z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0], mode='lines', line=dict(color='black', width=6), name='外箱'))
 
         total_vol = 0
         packed_counts = {}
         
         for b in packer.bins:
             for item in b.items:
-                # 處理名稱
                 is_l_shape = "[L-SHAPE]" in item.name
                 base_name = item.name.replace('[L-SHAPE]', '')
                 packed_counts[base_name] = packed_counts.get(base_name, 0) + 1
                 
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
-                idim_w, idim_d, idim_h = float(dim[0]), float(dim[1]), float(dim[2])
-                i_weight = float(item.weight)
-                
-                total_vol += (idim_w * idim_d * idim_h)
-                total_net_weight += i_weight
-                
+                w, d, h = float(dim[0]), float(dim[1]), float(dim[2]) # 實際裝箱長寬高
+                total_vol += (w * d * h)
+                total_net_weight += float(item.weight)
                 color = product_colors.get(base_name, '#888')
-                hover_text = f"{base_name}<br>尺寸: {idim_w}x{idim_d}x{idim_h}<br>位置:({x},{y},{z})"
 
-                # === 繪圖邏輯 ===
-                # 1. 畫底座 (所有物品都有)
+                # 畫底座 (實體)
                 fig.add_trace(go.Mesh3d(
-                    x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
-                    z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
-                    i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                    j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                    k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=color, opacity=1, name=base_name, showlegend=True,
-                    text=hover_text, hoverinfo='text',
-                    lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
-                    lightposition=dict(x=1000, y=1000, z=2000)
+                    x=[x, x+w, x+w, x, x, x+w, x+w, x], y=[y, y, y+d, y+d, y, y, y+d, y+d], z=[z, z, z, z, z+h, z+h, z+h, z+h],
+                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                    color=color, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name}<br>Pos:({x},{y},{z})"
+                ))
+                # 畫底座線框 (確保數量可見)
+                fig.add_trace(go.Scatter3d(
+                    x=[x, x+w, x+w, x, x, x, x+w, x+w, x, x, x, x, x+w, x+w, x+w, x+w],
+                    y=[y, y, y+d, y+d, y, y, y, y, y+d, y+d, y, y+d, y+d, y, y, y+d],
+                    z=[z, z, z, z, z, z+h, z+h, z+h, z+h, z+h, z, z+h, z+h, z+h, z, z],
+                    mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
 
                 if is_l_shape:
-                    # 2. 如果是 L 型，額外畫出一道虛擬的「側牆」
-                    # 邏輯：在底座的其中一邊長出一道牆
-                    # 高度 = 原本長度的剩餘部分 (30%)
+                    # === 虛擬牆繪製 (解決數量與位置問題) ===
+                    # 邏輯：在底座的「長邊」末端長出一道牆
+                    # 自動偵測哪邊是長邊 (因為 packer 可能會旋轉物品)
                     
-                    # 假設原始長度是透過 idim_w / 0.7 推算回來的 (粗略估計)
-                    original_l = idim_w / 0.7
-                    side_h = original_l * 0.3 
+                    wall_height = 8.0 # 預設側牆高度 (可調整)
+                    wall_thick = 0.5
                     
-                    # 為了不擋到視覺，我們把牆畫薄一點
-                    wall_thick = 0.5 
-                    
-                    # 決定牆的位置：畫在底座的「後面」或「側面」
-                    # 這裡簡單處理：畫在 X 軸末端
-                    sx = x + idim_w - wall_thick
-                    sy = y
-                    sz = z
-                    
-                    # 繪製側牆 Mesh
+                    # 判斷方向：沿著長邊畫牆
+                    if w >= d: # X軸是長邊
+                        wx, wy, wz = x + w - wall_thick, y, z
+                        ww, wd, wh = wall_thick, d, wall_height
+                    else: # Y軸是長邊
+                        wx, wy, wz = x, y + d - wall_thick, z
+                        ww, wd, wh = w, wall_thick, wall_height
+                        
+                    # 畫虛擬牆 (Mesh)
                     fig.add_trace(go.Mesh3d(
-                        x=[sx, sx+wall_thick, sx+wall_thick, sx, sx, sx+wall_thick, sx+wall_thick, sx],
-                        y=[sy, sy, sy+idim_d, sy+idim_d, sy, sy, sy+idim_d, sy+idim_d],
-                        z=[sz, sz, sz, sz, sz+side_h, sz+side_h, sz+side_h, sz+side_h],
-                        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                        k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                        color=color, opacity=0.8, showlegend=False # 稍微透明一點，讓你看得到裡面
+                        x=[wx, wx+ww, wx+ww, wx, wx, wx+ww, wx+ww, wx], y=[wy, wy, wy+wd, wy+wd, wy, wy, wy+wd, wy+wd], z=[wz, wz, wz, wz, wz+wh, wz+wh, wz+wh, wz+wh],
+                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=color, opacity=0.8, showlegend=False
                     ))
-                    
-                    # 繪製側牆線框
+                    # 畫虛擬牆線框 (關鍵！解決 5個變1個 的視覺問題)
                     fig.add_trace(go.Scatter3d(
-                        x=[sx, sx+wall_thick, sx+wall_thick, sx, sx, sx, sx+wall_thick, sx+wall_thick, sx, sx, sx, sx, sx+wall_thick, sx+wall_thick, sx+wall_thick, sx+wall_thick],
-                        y=[sy, sy, sy+idim_d, sy+idim_d, sy, sy, sy, sy, sy+idim_d, sy+idim_d, sy, sy+idim_d, sy+idim_d, sy, sy, sy+idim_d],
-                        z=[sz, sz, sz, sz, sz, sz+side_h, sz+side_h, sz+side_h, sz+side_h, sz+side_h, sz, sz+side_h, sz+side_h, sz+side_h, sz, sz],
-                        mode='lines', line=dict(color='#000000', width=2), showlegend=False
+                        x=[wx, wx+ww, wx+ww, wx, wx, wx, wx+ww, wx+ww, wx, wx, wx, wx, wx+ww, wx+ww, wx+ww, wx+ww],
+                        y=[wy, wy, wy+wd, wy+wd, wy, wy, wy, wy, wy+wd, wy+wd, wy, wy+wd, wy+wd, wy, wy, wy+wd],
+                        z=[wz, wz, wz, wz, wz, wz+wh, wz+wh, wz+wh, wz+wh, wz+wh, wz, wz+wh, wz+wh, wz+wh, wz, wz],
+                        mode='lines', line=dict(color='black', width=2), showlegend=False
                     ))
 
-                # 畫原本的線框 (共用)
-                fig.add_trace(go.Scatter3d(
-                    x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
-                    z=[z, z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z, z+idim_h, z+idim_h, z+idim_h, z, z],
-                    mode='lines', line=dict(color='#000000', width=2), showlegend=False
-                ))
-
-        names = set()
-        fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
-        
+        # 報表邏輯
         box_vol = box_l * box_w * box_h
         utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
         gross_weight = total_net_weight + box_weight
+        now_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
         
-        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-        now_str = tw_time.strftime("%Y-%m-%d %H:%M")
-        file_time_str = tw_time.strftime("%Y%m%d_%H%M")
-        
-        all_fitted = True
-        missing_items_html = ""
-        for name, req_qty in requested_counts.items():
-            real_qty = packed_counts.get(name, 0)
-            if real_qty < req_qty:
+        all_fitted, missing_html = True, ""
+        for name, req in requested_counts.items():
+            diff = req - packed_counts.get(name, 0)
+            if diff > 0:
                 all_fitted = False
-                diff = req_qty - real_qty
-                missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
+                missing_html += f"<li style='color:red; background:#ffd2d2; padding:5px;'>⚠️ {name}: 遺漏 {diff} 個</li>"
 
-        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
-
+        status = "<h3 style='color:green; bg:#d4edda;'>✅ 完美裝箱</h3>" if all_fitted else f"<h3 style='color:red; bg:#f8d7da;'>❌ 部分遺漏</h3><ul>{missing_html}</ul>"
+        
         report_html = f"""
         <div class="report-card">
-            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
-            <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
-                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
-            </table>
-            {status_html}
+            <h2>📋 訂單裝箱報告</h2>
+            <p><b>訂單:</b> {order_name} | <b>外箱:</b> {box_l}x{box_w}x{box_h} cm | <b>利用率:</b> {utilization:.2f}%</p>
+            {status}
         </div>
         """
-
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
         st.markdown(report_html, unsafe_allow_html=True)
-
-        full_html_content = f"""
-        <html>
-        <head>
-            <title>裝箱報告 - {order_name}</title>
-            <meta charset="utf-8">
-        </head>
-        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
-            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                {report_html.replace('class="report-card"', '')}
-                <div style="margin-top: 30px;">
-                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
-                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
-        
-        st.download_button(
-            label="📥 下載完整裝箱報告 (.html)",
-            data=full_html_content,
-            file_name=file_name,
-            mime="text/html",
-            type="primary"
-        )
-
+        st.download_button("📥 下載報告", report_html, "report.html", "text/html", type="primary")
         st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
