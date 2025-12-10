@@ -10,7 +10,7 @@ import datetime
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS 優化 (修復文字顏色)
+# CSS 優化 (強制修復字體顏色)
 # ==========================
 st.markdown("""
 <style>
@@ -27,17 +27,19 @@ st.markdown("""
         background: #ffffff; color: #333333; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px;
     }
     
-    /* 強制圖例文字顏色 */
-    .g-gtitle, .g-xtitle, .g-ytitle, .g-ztitle, .legendtext {
+    /* 強制圖例與坐標軸文字為黑色 */
+    .g-gtitle, .g-xtitle, .g-ytitle, .g-ztitle, .legendtext, .tick text {
         fill: #000000 !important;
         color: #000000 !important;
+        font-family: Arial, sans-serif !important;
+        font-weight: bold !important;
     }
     
     .block-container { padding-top: 2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D裝箱系統 (邏輯修復版)")
+st.title("📦 3D裝箱系統 (邏輯全修復版)")
 st.markdown("---")
 
 # ==========================
@@ -51,9 +53,9 @@ with col_left:
         order_name = st.text_input("訂單名稱", value="訂單_20241208")
         st.caption("外箱尺寸 (cm)")
         c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=35.0, step=1.0)
+        box_l = c1.number_input("長", value=30.0, step=1.0)
         box_w = c2.number_input("寬", value=25.0, step=1.0)
-        box_h = c3.number_input("高", value=20.0, step=1.0)
+        box_h = c3.number_input("高", value=15.0, step=1.0)
         box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
 with col_right:
@@ -63,7 +65,7 @@ with col_right:
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
             {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 3, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "不變形"}, # 預設改回不變形以便測試
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "不變形"}, 
         ])
 
     edited_df = st.data_editor(
@@ -87,18 +89,18 @@ with b2:
 # 核心運算
 # ==========================
 if run_button:
-    with st.spinner('運算中...'):
+    with st.spinner('正在進行智慧演算...'):
         
         # 1. 變數初始化
-        requested_counts = {}   # 客戶要多少
-        packed_ledger = {}      # 實際裝了多少 (包含手動L型 + 演算法算出的)
+        requested_counts = {}   # 客戶需求
+        packed_ledger = {}      # 總帳本 (修復報表錯誤的關鍵)
         
-        packer_items = []       # 一般物品清單 (給 packer 用)
-        lining_config = None    # L型內襯設定 (不給 packer，手動畫)
+        packer_items = []       # 一般物品 (給演算法)
+        lining_config = None    # L型內襯 (手動處理)
         
         total_net_weight = 0
         
-        # 2. 資料分類
+        # 2. 資料前處理與分流
         for index, row in edited_df.iterrows():
             try:
                 name = str(row["商品名稱"])
@@ -110,67 +112,60 @@ if run_button:
                 if qty > 0:
                     requested_counts[name] = requested_counts.get(name, 0) + qty
                     
-                    # === 模式 A: L型內襯 (強制手動處理) ===
+                    # === 分流 A: L型內襯 (手動強制安裝) ===
                     if mode == "L型彎折 (作為內襯墊底)":
-                        total_wall_thick = h * qty  
-                        total_floor_h = h * qty     
-                        visual_wall_h = l * 0.3 
+                        total_wall_thick = h * qty  # 側牆總厚
+                        total_floor_h = h * qty     # 底座總高
                         
-                        # 儲存內襯資訊
                         lining_config = {
                             'name': name, 'l': l, 'w': w, 'h': h, 'qty': qty,
                             'offset_x': total_wall_thick, 
                             'offset_z': total_floor_h,    
-                            'visual_wall_h': visual_wall_h,
+                            'visual_wall_h': l * 0.3,
                             'weight': weight
                         }
                         
-                        # 【關鍵修正1】直接記入「已裝箱帳本」
-                        # 因為這是我們強制畫上去的，所以絕對算「已裝入」
+                        # [修正1] 既然是手動裝的，直接記入總帳本，不用等演算法
                         packed_ledger[name] = packed_ledger.get(name, 0) + qty
                         total_net_weight += (weight * qty)
                         
-                    # === 模式 B & C: 對折 / 不變形 (交給 Packer) ===
+                    # === 分流 B: 丟給演算法 (對折/不變形) ===
                     else:
-                        item_l, item_h = l, h
+                        current_l, current_h = l, h
                         suffix = ""
                         
                         if "對折" in mode:
-                            item_l = l / 2
-                            item_h = h * 2
+                            current_l = l / 2
+                            current_h = h * 2
                             suffix = "(對折)"
                         
-                        # 【關鍵修正2】優先級排序 (Priority)
-                        # 我們給每個物品一個 priority 分數。
-                        # 薄的東西 (紙袋) 分數高 -> 先裝
-                        # 厚的東西 (禮盒) 分數低 -> 後裝
-                        # 這樣可以解決「攤平模式」紙袋放不進去的問題
-                        
-                        priority = 10 
-                        if h < 1.0: priority = 0 # 極薄物品 (紙袋) 最優先！
-                        elif "對折" in mode: priority = 5 # 對折次之
+                        # [修正2] 優先級邏輯 (解決攤平無法放入的問題)
+                        # 邏輯：體積越小的(通常是薄紙袋)越要先放，避免被大禮盒卡位
+                        # 這裡我們用體積做反向排序的依據
+                        vol = current_l * w * current_h
                         
                         for _ in range(qty):
                             packer_items.append({
-                                'item': Item(f"{name}{suffix}", item_l, w, item_h, weight),
-                                'priority': priority,
-                                'base_name': name # 記住原始名稱，以便統計
+                                'item': Item(f"{name}{suffix}", current_l, w, current_h, weight),
+                                'vol': vol,      # 用於排序
+                                'base_name': name # 用於還原名稱
                             })
                             
             except Exception as e:
-                print(e)
+                pass
 
-        # 3. 準備 Packer
+        # 3. 準備 Packer 環境
         packer = Packer()
         
-        # 如果有內襯，縮小箱子
+        # 若有 L 型內襯，縮減箱子可用空間
         if lining_config:
             eff_l = box_l - lining_config['offset_x']
             eff_h = box_h - lining_config['offset_z']
             offset_x = lining_config['offset_x']
             offset_z = lining_config['offset_z']
+            
             if eff_l <= 0 or eff_h <= 0:
-                st.error("❌ 錯誤：L型內襯太厚，佔滿了整個箱子！")
+                st.error("❌ 錯誤：L型內襯太厚，已佔滿箱子！")
                 st.stop()
             box = Bin('StandardBox', eff_l, box_w, eff_h, 999999)
         else:
@@ -180,14 +175,16 @@ if run_button:
             
         packer.add_bin(box)
 
-        # 4. 排序並加入 Packer (解決攤平放不下的問題)
-        # 讓 priority 小的 (薄的) 先排前面
-        packer_items.sort(key=lambda x: x['priority'])
+        # 4. 關鍵排序與裝箱
+        # [修正2續] 強制讓體積小(薄)的先裝。
+        # 因為 py3dbp 的 bigger_first=True 會讓大禮盒先佔位，導致紙袋沒地方鋪
+        # 所以我們這裡手動由小到大排序，並告訴 packer 不要再亂動順序 (bigger_first=False)
+        packer_items.sort(key=lambda x: x['vol']) 
         
-        for p_item in packer_items:
-            packer.add_item(p_item['item'])
+        for p_data in packer_items:
+            packer.add_item(p_data['item'])
             
-        # 執行運算 (False = 依照我們排好的順序放入)
+        # 執行運算 (False = 嚴格遵守我們的小到大順序，確保紙袋先鋪底)
         packer.pack(bigger_first=False) 
 
         # ==========================
@@ -200,15 +197,15 @@ if run_button:
             x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
             y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
             z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='black', width=6), name='外箱'
+            mode='lines', line=dict(color='black', width=5), name='外箱', showlegend=True
         ))
 
-        # 顏色管理
+        # 顏色
         unique_names = list(requested_counts.keys())
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF']
         colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_names)}
 
-        # --- A. 繪製 L 型內襯 (如果有) ---
+        # --- A. 繪製手動 L 型內襯 ---
         if lining_config:
             name = lining_config['name']
             qty = lining_config['qty']
@@ -219,11 +216,11 @@ if run_button:
             c = colors.get(name, '#888')
             
             for i in range(qty):
-                # 底座
+                # 底座層
                 fz = i * unit_h
                 fl_draw = min(l_real, box_l)
                 
-                # Mesh
+                # 實體
                 fig.add_trace(go.Mesh3d(
                     x=[0, fl_draw, fl_draw, 0, 0, fl_draw, fl_draw, 0],
                     y=[0, 0, w_real, w_real, 0, 0, w_real, w_real],
@@ -231,7 +228,7 @@ if run_button:
                     i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
                     color=c, opacity=1, name=name, showlegend=(i==0)
                 ))
-                # Wireframe
+                # 邊框
                 fig.add_trace(go.Scatter3d(
                     x=[0, fl_draw, fl_draw, 0, 0, 0, fl_draw, fl_draw, 0, 0, 0, 0, fl_draw, fl_draw, fl_draw, fl_draw],
                     y=[0, 0, w_real, w_real, 0, 0, 0, 0, w_real, w_real, 0, w_real, w_real, w_real, 0, 0],
@@ -239,7 +236,7 @@ if run_button:
                     mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
 
-                # 側牆
+                # 側牆層
                 wx = i * unit_h
                 fig.add_trace(go.Mesh3d(
                     x=[wx, wx+unit_h, wx+unit_h, wx, wx, wx+unit_h, wx+unit_h, wx],
@@ -255,16 +252,15 @@ if run_button:
                     mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
 
-        # --- B. 繪製 Packer 物品 ---
+        # --- B. 繪製 Packer 演算出的物品 ---
         total_vol = 0
         
         for b in packer.bins:
             for item in b.items:
-                # 解析原始名稱 (移除後綴)
                 raw_name = item.name
                 base_name = raw_name.split('(')[0] # e.g. "紙袋(對折)" -> "紙袋"
                 
-                # 【關鍵修正3】記入帳本
+                # [修正1] 記入總帳本
                 packed_ledger[base_name] = packed_ledger.get(base_name, 0) + 1
                 total_net_weight += float(item.weight)
                 
@@ -292,33 +288,43 @@ if run_button:
                     x=[final_x, final_x+w, final_x+w, final_x, final_x, final_x, final_x+w, final_x+w, final_x, final_x, final_x, final_x, final_x+w, final_x+w, final_x+w, final_x+w],
                     y=[final_y, final_y, final_y+d, final_y+d, final_y, final_y, final_y, final_y, final_y+d, final_y+d, final_y, final_y+d, final_y+d, final_y, final_y, final_y+d],
                     z=[final_z, final_z, final_z, final_z, final_z, final_z+h, final_z+h, final_z+h, final_z+h, final_z+h, final_z, final_z+h, final_z+h, final_z+h, final_z, final_z],
-                    mode='lines', line=dict(color='black', width=3), showlegend=False
+                    mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
 
         # 去重圖例
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
-        # Layout 設定 (強制黑色字體)
+        # Layout 設定 (修正字體顏色)
+        axis_style = dict(
+            titlefont=dict(color="black"), 
+            tickfont=dict(color="black"), 
+            backgroundcolor="white", 
+            gridcolor="#999999", 
+            showbackground=True
+        )
+        
         fig.update_layout(
-            template="plotly_white", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color="black"), # 全局黑色字
+            template="plotly_white", 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color="black"), # 全局黑色
             scene=dict(
-                xaxis=dict(title='長', titlefont=dict(color="black"), tickfont=dict(color="black"), backgroundcolor="white", gridcolor="#999999", showbackground=True), 
-                yaxis=dict(title='寬', titlefont=dict(color="black"), tickfont=dict(color="black"), backgroundcolor="white", gridcolor="#999999", showbackground=True), 
-                zaxis=dict(title='高', titlefont=dict(color="black"), tickfont=dict(color="black"), backgroundcolor="white", gridcolor="#999999", showbackground=True), 
-                aspectmode='data', camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
+                xaxis={**axis_style, 'title':'長(L)'}, 
+                yaxis={**axis_style, 'title':'寬(W)'}, 
+                zaxis={**axis_style, 'title':'高(H)'}, 
+                aspectmode='data', 
+                camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
             ),
-            margin=dict(t=30, b=0, l=0, r=0), height=600, 
+            margin=dict(t=30, b=0, l=0, r=0), 
+            height=600, 
             legend=dict(x=0, y=1, bgcolor="rgba(255,255,255,0.8)", borderwidth=1, font=dict(color="black"))
         )
 
-        # 4. 產生報表 (修正比對邏輯)
+        # 4. 產生報表
         box_vol = box_l * box_w * box_h
-        # L型內襯體積
         lining_vol = 0
         if lining_config:
-            # 側牆 + 底座
             l_v = lining_config['offset_x'] * lining_config['w'] * lining_config['visual_wall_h']
             l_f = (box_l - lining_config['offset_x']) * lining_config['w'] * lining_config['offset_z']
             lining_vol = l_v + l_f
@@ -329,9 +335,10 @@ if run_button:
 
         all_fitted = True
         missing_html = ""
+        
+        # 比對需求與總帳
         for name, req in requested_counts.items():
-            # 從「統一帳本」中讀取已裝入數量
-            real = packed_ledger.get(name, 0)
+            real = packed_ledger.get(name, 0) # 從總帳拿數字
             diff = req - real
             if diff > 0:
                 all_fitted = False
@@ -343,6 +350,7 @@ if run_button:
         <div class="report-card">
             <h2>📋 訂單裝箱報告</h2>
             <p><b>訂單:</b> {order_name} | <b>外箱:</b> {box_l}x{box_w}x{box_h} cm | <b>利用率:</b> {final_utilization:.2f}%</p>
+            <p><b>總重量:</b> {gross_weight:.2f} kg</p>
             {status}
         </div>
         """
