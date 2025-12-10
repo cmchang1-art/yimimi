@@ -31,7 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D裝箱系統 (全模式完美版)")
+st.title("📦 3D裝箱系統 (穩定除錯版)")
 st.markdown("---")
 
 # ==========================
@@ -56,7 +56,7 @@ with col_right:
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
             {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 3, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "對折 (長度/2, 高度x2)"}, 
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "不變形"}, 
         ])
 
     edited_df = st.data_editor(
@@ -119,35 +119,34 @@ if run_button:
                         
                     # === 邏輯 B: 對折 (實體綑綁策略) ===
                     elif "對折" in mode:
-                        # 將所有對折紙袋「綑綁」成一個大方塊
-                        # 這樣演算法就會把它們視為一個整體，優先塞到角落
-                        
                         folded_l = l / 2
                         folded_h = h * 2
-                        
-                        # 堆疊後的高度 = 單個對折高度 * 數量
                         stack_h = folded_h * qty
                         stack_weight = weight * qty
                         
-                        # 建立一個 "堆疊包"
+                        # 堆疊包
                         packer_items.append({
                             'item': Item(f"{name}(Stack)", folded_l, w, stack_h, stack_weight),
-                            'area': 999999, # 給予超大底面積權重，確保絕對優先放入
+                            'area': 999999, # 優先級最高
                             'base_name': name,
                             'is_stack': True,
-                            'stack_qty': qty, # 記住裡面有幾個
+                            'stack_qty': qty,
                             'unit_h': folded_h
                         })
                         
                     # === 邏輯 C: 不變形/攤平 (底面積優先) ===
                     else:
                         area = l * w 
+                        # [關鍵修正] 這裡必須補上 'stack_qty': 1 和 'unit_h'
+                        # 避免後續讀取時發生 KeyError
                         for _ in range(qty):
                             packer_items.append({
                                 'item': Item(name, l, w, h, weight),
                                 'area': area,
                                 'base_name': name,
-                                'is_stack': False
+                                'is_stack': False,
+                                'stack_qty': 1,  # 修正點：補上預設值
+                                'unit_h': h      # 修正點：補上預設值
                             })
                             
             except Exception as e:
@@ -174,9 +173,6 @@ if run_button:
         packer.add_bin(bin_obj)
 
         # 4. 排序與裝箱
-        # 依照 Area 由大到小排序 (對折包 Area 最大 -> 最先放 -> 靠邊)
-        # 一般攤平紙袋 Area 次大 -> 鋪底
-        # 禮盒 Area 最小 -> 最後放
         packer_items.sort(key=lambda x: x['area'], reverse=True)
         
         for p in packer_items:
@@ -189,7 +185,6 @@ if run_button:
         # ==========================
         fig = go.Figure()
         
-        # 顏色
         unique_names = list(requested_counts.keys())
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF']
         color_map = {name: palette[i % len(palette)] for i, name in enumerate(unique_names)}
@@ -245,9 +240,6 @@ if run_button:
 
         # B. 畫演算法物品
         total_vol = 0
-        
-        # 建立 packer item 到 原始資料 的映射
-        # 因為 packer.bins 裡的 item 屬性有限，我們需要查表找回 stack_qty
         packer_data_map = {p['item'].name: p for p in packer_items}
 
         for b in packer.bins:
@@ -255,13 +247,13 @@ if run_button:
                 raw_name = item.name
                 base_name = raw_name.split('(')[0] 
                 
-                # 查表
+                # 安全存取資料 (修正 KeyError)
                 p_data = packer_data_map.get(raw_name)
-                is_stack = p_data['is_stack'] if p_data else False
-                stack_qty = p_data['stack_qty'] if p_data else 1
-                unit_h = p_data['unit_h'] if p_data and 'unit_h' in p_data else 0
+                # 如果找不到 (通常不會)，給預設值
+                is_stack = p_data.get('is_stack', False) if p_data else False
+                stack_qty = p_data.get('stack_qty', 1) if p_data else 1
+                unit_h = p_data.get('unit_h', 0) if p_data else 0
                 
-                # 記入帳本 (加上 stack_qty)
                 packed_ledger[base_name] = packed_ledger.get(base_name, 0) + stack_qty
                 total_net_weight += float(item.weight)
                 
@@ -273,9 +265,9 @@ if run_button:
                 total_vol += (w * d * h)
                 pc = color_map.get(base_name, '#888')
 
-                # 如果是堆疊包，畫出分隔線
+                # 繪圖
                 if is_stack:
-                    # 畫實體
+                    # 實體
                     fig.add_trace(go.Mesh3d(
                         x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
                         y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
@@ -283,14 +275,14 @@ if run_button:
                         i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
                         color=pc, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name} (堆疊x{stack_qty})"
                     ))
-                    # 畫外框
+                    # 外框
                     fig.add_trace(go.Scatter3d(
                         x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
                         y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
                         z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
                         mode='lines', line=dict(color='black', width=3), showlegend=False
                     ))
-                    # 畫內部分隔線
+                    # 分隔線
                     for i in range(1, stack_qty):
                         lz = fz + (i * unit_h)
                         fig.add_trace(go.Scatter3d(
@@ -300,7 +292,6 @@ if run_button:
                             mode='lines', line=dict(color='black', width=1), showlegend=False
                         ))
                 else:
-                    # 一般物品
                     fig.add_trace(go.Mesh3d(
                         x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
                         y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
