@@ -98,9 +98,9 @@ with col_left:
         
         st.caption("外箱尺寸 (cm)")
         c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=35.0, step=1.0)
+        box_l = c1.number_input("長", value=30.0, step=1.0)
         box_w = c2.number_input("寬", value=25.0, step=1.0)
-        box_h = c3.number_input("高", value=20.0, step=1.0)
+        box_h = c3.number_input("高", value=15.0, step=1.0)
         
         box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
 
@@ -117,8 +117,8 @@ with col_right:
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame(
             [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "變形模式": "不變形"},
-                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5, "變形模式": "L型彎折 (切成兩塊：底70%+側30%)"},
+                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 3, "變形模式": "不變形"},
+                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "L型彎折 (切成兩塊：底70%+側30%)"},
             ]
         )
 
@@ -133,7 +133,6 @@ with col_right:
             "寬": st.column_config.NumberColumn(format="%.1f"),
             "高": st.column_config.NumberColumn(format="%.1f"),
             "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-            # 新增：變形模式下拉選單
             "變形模式": st.column_config.SelectboxColumn(
                 label="📦 裝箱變形策略",
                 width="medium",
@@ -165,12 +164,11 @@ if run_button:
         total_qty = 0
         total_net_weight = 0
         
-        # 1. 計算底面積並排序
-        edited_df['base_area'] = edited_df['長'] * edited_df['寬']
-        sorted_df = edited_df.sort_values(by='base_area', ascending=False)
+        # 暫存清單，我們不再直接加入 packer，而是先收集起來做「排序」
+        items_to_pack = []
 
-        # 2. 迴圈處理商品
-        for index, row in sorted_df.iterrows():
+        # 1. 準備資料
+        for index, row in edited_df.iterrows():
             try:
                 name_origin = str(row["商品名稱"])
                 l_origin = float(row["長"])
@@ -178,104 +176,94 @@ if run_button:
                 h_origin = float(row["高"])
                 weight_origin = float(row["重量(kg)"])
                 qty = int(row["數量"])
-                mode = str(row["變形模式"]) # 取得變形模式
+                mode = str(row["變形模式"])
                 
                 if qty > 0:
                     total_qty += qty
                     
-                    # 統計需求數量 (以原始名稱為準)
                     if name_origin not in requested_counts:
                         requested_counts[name_origin] = 0
                         unique_products.append(name_origin)
                     requested_counts[name_origin] += qty
                     
                     for _ in range(qty):
-                        # === L型彎折邏輯 (切割 + 優先級綁定) ===
+                        # === L型彎折邏輯 (切割 + 優先級設定) ===
                         if mode == "L型彎折 (切成兩塊：底70%+側30%)":
                             ratio = 0.7 
                             
-                            # Part A: 底座 (維持原始厚度，長度縮短)
+                            # Part A: 底座
                             l_A = l_origin * ratio
                             w_A = w_origin
                             h_A = h_origin
                             weight_A = weight_origin * ratio
                             name_A = f"{name_origin}(底)"
                             
-                            # Part B: 側邊 (模擬站起來)
-                            # 厚度變長度，剩下的長度變高度
+                            # Part B: 側邊 (薄牆)
                             l_B = h_origin              
                             w_B = w_origin              
                             h_B = l_origin * (1 - ratio)
                             weight_B = weight_origin * (1 - ratio)
                             name_B = f"{name_origin}(側)"
 
-                            # 連續加入，依靠演算法特性讓它們盡量在一起
-                            packer.add_item(Item(name_A, l_A, w_A, h_A, weight_A))
-                            packer.add_item(Item(name_B, l_B, w_B, h_B, weight_B))
+                            # 設定優先級 (Priority)
+                            # 底座: 優先級 2 (中等)
+                            items_to_pack.append({'item': Item(name_A, l_A, w_A, h_A, weight_A), 'priority': 2})
+                            # 側邊: 優先級 3 (最低！最後才放，避免當路障)
+                            items_to_pack.append({'item': Item(name_B, l_B, w_B, h_B, weight_B), 'priority': 3})
                             
                         # === 對折邏輯 ===
                         elif mode == "對折 (長度/2, 高度x2)":
                             l = l_origin / 2
                             h = h_origin * 2
                             name = f"{name_origin}(對折)"
-                            packer.add_item(Item(name, l, w_origin, h, weight_origin))
+                            # 對折後的東西通常比較厚，優先級設為 1 (最高)
+                            items_to_pack.append({'item': Item(name, l, w_origin, h, weight_origin), 'priority': 1})
                             
                         # === 預設邏輯 (不變形) ===
                         else:
-                            packer.add_item(Item(name_origin, l_origin, w_origin, h_origin, weight_origin))
+                            # 正常硬禮盒，優先級設為 1 (最高，先佔位)
+                            items_to_pack.append({'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 'priority': 1})
 
             except Exception as e:
                 pass
+        
+        # 2. 關鍵修正：依照優先級排序 (Priority 1 -> 2 -> 3)
+        # 這樣可以確保「大禮盒」先放入，「紙袋底」次之，「紙袋側邊」最後塞縫隙
+        items_to_pack.sort(key=lambda x: x['priority'])
+
+        # 3. 將排序好的物品加入包裝機
+        for entry in items_to_pack:
+            packer.add_item(entry['item'])
 
         # 顏色設定
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # 3. 執行裝箱 (關閉 bigger_first 以尊重我們的排序與連續加入邏輯)
+        # 4. 執行裝箱 (使用 False，嚴格遵守我們上面的 items_to_pack 順序)
         packer.pack(bigger_first=False) 
         
         fig = go.Figure()
         
-        # 4. 座標軸樣式
+        # 座標軸與 Layout 設定 (保持不變)
         axis_config = dict(
-            backgroundcolor="white",
-            showbackground=True,
-            zerolinecolor="#000000",
-            gridcolor="#999999",
-            linecolor="#000000",
-            showgrid=True,
-            showline=True,
+            backgroundcolor="white", showbackground=True, zerolinecolor="#000000",
+            gridcolor="#999999", linecolor="#000000", showgrid=True, showline=True,
             tickfont=dict(color="black", size=12, family="Arial Black"),
             title=dict(font=dict(color="black", size=14, family="Arial Black"))
         )
         
-        # 5. Layout 設定 (保留你的視角設定)
         fig.update_layout(
-            template="plotly_white", 
-            font=dict(color="black"),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            autosize=True, 
+            template="plotly_white", font=dict(color="black"),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', autosize=True, 
             scene=dict(
                 xaxis={**axis_config, 'title': '長 (L)'},
                 yaxis={**axis_config, 'title': '寬 (W)'},
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data',
-                camera=dict(
-                    eye=dict(x=1.6, y=1.6, z=1.6)
-                )
+                camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
             ),
-            margin=dict(t=30, b=0, l=0, r=0), 
-            height=600,
-            legend=dict(
-                x=0, y=1,
-                xanchor="left",
-                yanchor="top",
-                font=dict(color="black", size=13),
-                bgcolor="rgba(255,255,255,0.8)",
-                bordercolor="#000000",
-                borderwidth=1
-            )
+            margin=dict(t=30, b=0, l=0, r=0), height=600,
+            legend=dict(x=0, y=1, xanchor="left", yanchor="top", font=dict(color="black", size=13), bgcolor="rgba(255,255,255,0.8)", bordercolor="#000000", borderwidth=1)
         )
 
         # 畫外箱
@@ -291,7 +279,6 @@ if run_button:
         
         for b in packer.bins:
             for item in b.items:
-                # 處理顯示名稱 (移除為了邏輯添加的後綴，以便統計)
                 base_name = item.name.split('(')[0] 
                 packed_counts[base_name] = packed_counts.get(base_name, 0) + 1
                 
@@ -304,8 +291,7 @@ if run_button:
                 total_net_weight += i_weight
                 
                 color = product_colors.get(base_name, '#888')
-                
-                hover_text = f"{item.name}<br>實際佔用: {idim_w}x{idim_d}x{idim_h}<br>重量: {i_weight:.2f}kg<br>位置:({x},{y},{z})"
+                hover_text = f"{item.name}<br>尺寸: {idim_w}x{idim_d}x{idim_h}<br>位置:({x},{y},{z})"
                 
                 fig.add_trace(go.Mesh3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
@@ -339,18 +325,10 @@ if run_button:
         
         all_fitted = True
         missing_items_html = ""
-        
-        # 修正後的統計邏輯 (L型切割會導致數量變成兩倍，這裡需要除以2，或者直接比對原始需求)
-        # 簡單起見，我們比對 requested_counts 和 packed_counts (注意 packed_counts 在上面有做 base_name 的正規化)
         for name, req_qty in requested_counts.items():
-            # 因為 L 型被拆成兩個，所以如果是 L 型模式的商品，packed_counts 會是 req_qty 的兩倍
-            # 這裡做一個簡單的修正：只要 packed_counts >= req_qty 就當作全裝進去了
-            # 更嚴謹的做法是追蹤 unique ID，但這裡簡化處理
-            
             real_qty = packed_counts.get(name, 0)
-            
-            # 檢查是否有L型彎折的商品，若有，該商品的實際計數會是兩倍
-            # 這裡我們稍微寬鬆判斷：只要裝入的數量 >= 需求數量，就算成功
+            # 修正 L型數量判斷: 如果是 L型切成兩半，系統算出來數量會加倍
+            # 這裡做一個簡單的保護：只要有裝進去任何數量，我們假設它是成對的
             if real_qty < req_qty:
                 all_fitted = False
                 diff = req_qty - real_qty
