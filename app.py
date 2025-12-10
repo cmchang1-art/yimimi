@@ -24,11 +24,14 @@ st.markdown("""
         padding: 20px; border: 2px solid #e0e0e0; border-radius: 10px; 
         background: #ffffff; color: #333333; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px;
     }
+    .g-gtitle, .g-xtitle, .g-ytitle, .g-ztitle, .legendtext, .tick text {
+        fill: #000000 !important; color: #000000 !important; font-family: Arial !important; font-weight: bold !important;
+    }
     .block-container { padding-top: 2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📦 3D裝箱系統 (底面積優先修正版)")
+st.title("📦 3D裝箱系統 (全模式完美版)")
 st.markdown("---")
 
 # ==========================
@@ -53,7 +56,7 @@ with col_right:
     if 'df' not in st.session_state:
         st.session_state.df = pd.DataFrame([
             {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 3, "變形模式": "不變形"},
-            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "不變形"}, 
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 3, "變形模式": "對折 (長度/2, 高度x2)"}, 
         ])
 
     edited_df = st.data_editor(
@@ -77,18 +80,16 @@ with b2:
 # 核心運算
 # ==========================
 if run_button:
-    with st.spinner('運算中...'):
+    with st.spinner('正在進行最佳化演算...'):
         
         # 1. 變數初始化
-        requested_counts = {}   # 客戶需求
-        final_counts = {}       # 最終成功裝入的數量 (手動+自動)
-        
+        requested_counts = {}   
+        packed_ledger = {}      # 總帳本
         packer_items = []       # 給演算法的清單
         lining_data = None      # 手動 L 型內襯資料
-        
         total_net_weight = 0
         
-        # 2. 資料處理 loop
+        # 2. 資料處理
         for index, row in edited_df.iterrows():
             try:
                 name = str(row["商品名稱"])
@@ -107,38 +108,52 @@ if run_button:
                         
                         lining_data = {
                             'name': name, 'l': l, 'w': w, 'h': h, 'qty': qty,
-                            'off_x': total_wall_thick, # 內襯吃掉的X空間
-                            'off_z': total_floor_h,    # 內襯吃掉的Z空間
-                            'vis_h': l * 0.3
+                            'off_x': total_wall_thick, 
+                            'off_z': total_floor_h,    
+                            'vis_h': l * 0.3,
+                            'weight': weight
                         }
-                        # 【關鍵】手動裝入的，直接記入最終帳本
-                        final_counts[name] = final_counts.get(name, 0) + qty
+                        # 直接記入帳本
+                        packed_ledger[name] = packed_ledger.get(name, 0) + qty
                         total_net_weight += (weight * qty)
                         
-                    # === 邏輯 B: 給演算法 (攤平 / 對折) ===
+                    # === 邏輯 B: 對折 (實體綑綁策略) ===
+                    elif "對折" in mode:
+                        # 將所有對折紙袋「綑綁」成一個大方塊
+                        # 這樣演算法就會把它們視為一個整體，優先塞到角落
+                        
+                        folded_l = l / 2
+                        folded_h = h * 2
+                        
+                        # 堆疊後的高度 = 單個對折高度 * 數量
+                        stack_h = folded_h * qty
+                        stack_weight = weight * qty
+                        
+                        # 建立一個 "堆疊包"
+                        packer_items.append({
+                            'item': Item(f"{name}(Stack)", folded_l, w, stack_h, stack_weight),
+                            'area': 999999, # 給予超大底面積權重，確保絕對優先放入
+                            'base_name': name,
+                            'is_stack': True,
+                            'stack_qty': qty, # 記住裡面有幾個
+                            'unit_h': folded_h
+                        })
+                        
+                    # === 邏輯 C: 不變形/攤平 (底面積優先) ===
                     else:
-                        p_l, p_h = l, h
-                        p_name = name # 保持原名，方便最後統計
-                        
-                        if "對折" in mode:
-                            p_l, p_h = l/2, h*2
-                            # 對折後名稱不變，但尺寸變了
-                        
-                        # 【超級關鍵】計算底面積 (Area)
-                        # 我們要用底面積來排序，確保大面積的紙袋先鋪底
-                        area = p_l * w 
-                        
+                        area = l * w 
                         for _ in range(qty):
                             packer_items.append({
-                                'item': Item(p_name, p_l, w, p_h, weight),
-                                'area': area, # 用於排序
-                                'base_name': name
+                                'item': Item(name, l, w, h, weight),
+                                'area': area,
+                                'base_name': name,
+                                'is_stack': False
                             })
                             
             except Exception as e:
                 pass
 
-        # 3. 準備 Packer (如果有內襯，箱子變小)
+        # 3. 準備 Packer
         packer = Packer()
         
         if lining_data:
@@ -158,14 +173,15 @@ if run_button:
             
         packer.add_bin(bin_obj)
 
-        # 4. 【排序修正】: 依照底面積 (Area) 由大到小排序
-        # 這樣大紙袋(Area大, Vol小) 會排在 禮盒(Area小, Vol大) 前面
+        # 4. 排序與裝箱
+        # 依照 Area 由大到小排序 (對折包 Area 最大 -> 最先放 -> 靠邊)
+        # 一般攤平紙袋 Area 次大 -> 鋪底
+        # 禮盒 Area 最小 -> 最後放
         packer_items.sort(key=lambda x: x['area'], reverse=True)
         
         for p in packer_items:
             packer.add_item(p['item'])
             
-        # 執行裝箱 (bigger_first=False) -> 嚴格遵守我們的排序
         packer.pack(bigger_first=False)
 
         # ==========================
@@ -186,7 +202,7 @@ if run_button:
             mode='lines', line=dict(color='black', width=5), name='外箱', showlegend=True
         ))
 
-        # A. 畫內襯
+        # A. 畫手動 L 型內襯
         if lining_data:
             lname = lining_data['name']
             lqty = lining_data['qty']
@@ -194,92 +210,112 @@ if run_button:
             lc = color_map.get(lname, '#888')
             
             for i in range(lqty):
-                # 底座
-                z_pos = i * uh
+                fz = i * uh
                 l_draw = min(lining_data['l'], box_l)
                 
-                # 實體 Mesh
+                # 底座
                 fig.add_trace(go.Mesh3d(
                     x=[0, l_draw, l_draw, 0, 0, l_draw, l_draw, 0],
                     y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, lining_data['w'], lining_data['w']],
-                    z=[z_pos, z_pos, z_pos, z_pos, z_pos+uh, z_pos+uh, z_pos+uh, z_pos+uh],
+                    z=[fz, fz, fz, fz, fz+uh, fz+uh, fz+uh, fz+uh],
                     i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
                     color=lc, opacity=1, name=lname, showlegend=(i==0)
                 ))
-                # 黑框
                 fig.add_trace(go.Scatter3d(
                     x=[0, l_draw, l_draw, 0, 0, 0, l_draw, l_draw, 0, 0, 0, 0, l_draw, l_draw, l_draw, l_draw],
                     y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, 0, 0, lining_data['w'], lining_data['w'], 0, lining_data['w'], lining_data['w'], lining_data['w'], 0, 0],
-                    z=[z_pos, z_pos, z_pos, z_pos, z_pos, z_pos+uh, z_pos+uh, z_pos+uh, z_pos+uh, z_pos+uh, z_pos, z_pos+uh, z_pos+uh, z_pos+uh, z_pos, z_pos],
+                    z=[fz, fz, fz, fz, fz, fz+uh, fz+uh, fz+uh, fz+uh, fz+uh, fz, fz+unit_h, fz+unit_h, fz+unit_h, fz, fz],
                     mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
-                
                 # 側牆
-                x_pos = i * uh
+                wx = i * uh
                 fig.add_trace(go.Mesh3d(
-                    x=[x_pos, x_pos+uh, x_pos+uh, x_pos, x_pos, x_pos+uh, x_pos+uh, x_pos],
+                    x=[wx, wx+uh, wx+uh, wx, wx, wx+uh, wx+uh, wx],
                     y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, lining_data['w'], lining_data['w']],
                     z=[0, 0, 0, 0, lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h']],
                     i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
                     color=lc, opacity=1, showlegend=False
                 ))
                 fig.add_trace(go.Scatter3d(
-                    x=[x_pos, x_pos+uh, x_pos+uh, x_pos, x_pos, x_pos, x_pos+uh, x_pos+uh, x_pos, x_pos, x_pos, x_pos, x_pos+uh, x_pos+uh, x_pos+uh, x_pos+uh],
+                    x=[wx, wx+uh, wx+uh, wx, wx, wx, wx+uh, wx+uh, wx, wx, wx, wx, wx+uh, wx+uh, wx+uh, wx+uh],
                     y=[0, 0, lining_data['w'], lining_data['w'], 0, 0, 0, 0, lining_data['w'], lining_data['w'], 0, lining_data['w'], lining_data['w'], lining_data['w'], 0, 0],
                     z=[0, 0, 0, 0, 0, lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], 0, lining_data['vis_h'], lining_data['vis_h'], lining_data['vis_h'], 0, 0],
                     mode='lines', line=dict(color='black', width=2), showlegend=False
                 ))
 
-        # B. 畫演算法算出來的物品
+        # B. 畫演算法物品
         total_vol = 0
+        
+        # 建立 packer item 到 原始資料 的映射
+        # 因為 packer.bins 裡的 item 屬性有限，我們需要查表找回 stack_qty
+        packer_data_map = {p['item'].name: p for p in packer_items}
+
         for b in packer.bins:
             for item in b.items:
-                # 這裡的 item.name 就是我們前面傳進去的 (沒改過，或者只加了後綴)
-                # 為了統計，我們要還原成 base_name
                 raw_name = item.name
-                # 如果有 "(對折)" 字樣，要移除才能跟 requested_counts 比對
-                # 因為我們在輸入端是沒有 "(對折)" 的
-                if "(對折)" in raw_name:
-                    base_name = raw_name.replace("(對折)", "")
-                else:
-                    base_name = raw_name
+                base_name = raw_name.split('(')[0] 
                 
-                # 【關鍵】在這裡累加計數
-                final_counts[base_name] = final_counts.get(base_name, 0) + 1
+                # 查表
+                p_data = packer_data_map.get(raw_name)
+                is_stack = p_data['is_stack'] if p_data else False
+                stack_qty = p_data['stack_qty'] if p_data else 1
+                unit_h = p_data['unit_h'] if p_data and 'unit_h' in p_data else 0
+                
+                # 記入帳本 (加上 stack_qty)
+                packed_ledger[base_name] = packed_ledger.get(base_name, 0) + stack_qty
                 total_net_weight += float(item.weight)
                 
-                # 座標
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
                 dim = item.get_dimension()
                 w, d, h = float(dim[0]), float(dim[1]), float(dim[2])
                 
-                # 偏移
-                fx = x + offset_x
-                fy = y 
-                fz = z + offset_z
-                
+                fx, fy, fz = x + offset_x, y, z + offset_z
                 total_vol += (w * d * h)
                 pc = color_map.get(base_name, '#888')
-                
-                fig.add_trace(go.Mesh3d(
-                    x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
-                    y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
-                    z=[fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h],
-                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=pc, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=base_name
-                ))
-                fig.add_trace(go.Scatter3d(
-                    x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
-                    y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
-                    z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
-                    mode='lines', line=dict(color='black', width=3), showlegend=False
-                ))
 
-        # 去重
-        names = set()
-        fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
+                # 如果是堆疊包，畫出分隔線
+                if is_stack:
+                    # 畫實體
+                    fig.add_trace(go.Mesh3d(
+                        x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
+                        y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
+                        z=[fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h],
+                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=pc, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=f"{base_name} (堆疊x{stack_qty})"
+                    ))
+                    # 畫外框
+                    fig.add_trace(go.Scatter3d(
+                        x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
+                        y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
+                        z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
+                        mode='lines', line=dict(color='black', width=3), showlegend=False
+                    ))
+                    # 畫內部分隔線
+                    for i in range(1, stack_qty):
+                        lz = fz + (i * unit_h)
+                        fig.add_trace(go.Scatter3d(
+                            x=[fx, fx+w, fx+w, fx, fx],
+                            y=[fy, fy, fy+d, fy+d, fy],
+                            z=[lz, lz, lz, lz, lz],
+                            mode='lines', line=dict(color='black', width=1), showlegend=False
+                        ))
+                else:
+                    # 一般物品
+                    fig.add_trace(go.Mesh3d(
+                        x=[fx, fx+w, fx+w, fx, fx, fx+w, fx+w, fx], 
+                        y=[fy, fy, fy+d, fy+d, fy, fy, fy+d, fy+d], 
+                        z=[fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h],
+                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=pc, opacity=1, name=base_name, showlegend=True, hoverinfo='text', text=base_name
+                    ))
+                    fig.add_trace(go.Scatter3d(
+                        x=[fx, fx+w, fx+w, fx, fx, fx, fx+w, fx+w, fx, fx, fx, fx, fx+w, fx+w, fx+w, fx+w],
+                        y=[fy, fy, fy+d, fy+d, fy, fy, fy, fy, fy+d, fy+d, fy, fy+d, fy+d, fy+d, fy, fy],
+                        z=[fz, fz, fz, fz, fz, fz+h, fz+h, fz+h, fz+h, fz+h, fz, fz+h, fz+h, fz+h, fz, fz],
+                        mode='lines', line=dict(color='black', width=3), showlegend=False
+                    ))
 
-        # Layout (修正版標準寫法)
+        # Layout
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor='rgba(0,0,0,0)',
@@ -297,7 +333,7 @@ if run_button:
             legend=dict(x=0, y=1, bgcolor="rgba(255,255,255,0.8)", borderwidth=1, font=dict(color="black"))
         )
 
-        # 5. 報表生成 (比對)
+        # 5. 報表
         box_vol = box_l * box_w * box_h
         lining_vol = 0
         if lining_data:
@@ -311,7 +347,7 @@ if run_button:
         missing_html = ""
         
         for name, req in requested_counts.items():
-            real = final_counts.get(name, 0)
+            real = packed_ledger.get(name, 0)
             diff = req - real
             if diff > 0:
                 all_fitted = False
