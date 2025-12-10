@@ -100,7 +100,7 @@ if run_button:
         
         total_net_weight = 0
         
-        # 2. 資料前處理與分流
+        # 2. 資料分類與預處理
         for index, row in edited_df.iterrows():
             try:
                 name = str(row["商品名稱"])
@@ -257,6 +257,7 @@ if run_button:
         
         for b in packer.bins:
             for item in b.items:
+                # 解析原始名稱 (移除後綴)
                 raw_name = item.name
                 base_name = raw_name.split('(')[0] # e.g. "紙袋(對折)" -> "紙袋"
                 
@@ -295,30 +296,52 @@ if run_button:
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
-        # Layout 設定 (修正字體顏色)
-        axis_style = dict(
-            titlefont=dict(color="black"), 
-            tickfont=dict(color="black"), 
-            backgroundcolor="white", 
-            gridcolor="#999999", 
-            showbackground=True
-        )
-        
+        # Layout 設定 (修正版：使用標準巢狀結構)
         fig.update_layout(
-            template="plotly_white", 
-            paper_bgcolor='rgba(0,0,0,0)', 
+            template="plotly_white",
+            paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color="black"), # 全局黑色
+            font=dict(color="black"),  # 全局黑色字體
             scene=dict(
-                xaxis={**axis_style, 'title':'長(L)'}, 
-                yaxis={**axis_style, 'title':'寬(W)'}, 
-                zaxis={**axis_style, 'title':'高(H)'}, 
-                aspectmode='data', 
+                # X軸設定
+                xaxis=dict(
+                    title=dict(text='長 (L)', font=dict(color="black")),
+                    tickfont=dict(color="black"),
+                    backgroundcolor="white",
+                    gridcolor="#999999",
+                    showbackground=True,
+                    zerolinecolor="black"
+                ),
+                # Y軸設定
+                yaxis=dict(
+                    title=dict(text='寬 (W)', font=dict(color="black")),
+                    tickfont=dict(color="black"),
+                    backgroundcolor="white",
+                    gridcolor="#999999",
+                    showbackground=True,
+                    zerolinecolor="black"
+                ),
+                # Z軸設定
+                zaxis=dict(
+                    title=dict(text='高 (H)', font=dict(color="black")),
+                    tickfont=dict(color="black"),
+                    backgroundcolor="white",
+                    gridcolor="#999999",
+                    showbackground=True,
+                    zerolinecolor="black"
+                ),
+                aspectmode='data',
                 camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
             ),
-            margin=dict(t=30, b=0, l=0, r=0), 
-            height=600, 
-            legend=dict(x=0, y=1, bgcolor="rgba(255,255,255,0.8)", borderwidth=1, font=dict(color="black"))
+            margin=dict(t=30, b=0, l=0, r=0),
+            height=600,
+            legend=dict(
+                x=0, 
+                y=1, 
+                bgcolor="rgba(255,255,255,0.8)", 
+                borderwidth=1, 
+                font=dict(color="black")
+            )
         )
 
         # 4. 產生報表
@@ -336,7 +359,7 @@ if run_button:
         all_fitted = True
         missing_html = ""
         
-        # 比對需求與總帳
+        # [修正1續] 比對需求與總帳本
         for name, req in requested_counts.items():
             real = packed_ledger.get(name, 0) # 從總帳拿數字
             diff = req - real
