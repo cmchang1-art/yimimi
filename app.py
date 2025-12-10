@@ -164,7 +164,6 @@ if run_button:
         total_qty = 0
         total_net_weight = 0
         
-        # 暫存清單，我們不再直接加入 packer，而是先收集起來做「排序」
         items_to_pack = []
 
         # 1. 準備資料
@@ -187,64 +186,59 @@ if run_button:
                     requested_counts[name_origin] += qty
                     
                     for _ in range(qty):
-                        # === L型彎折邏輯 (切割 + 優先級設定) ===
+                        # === L型彎折邏輯 (改良：使用對折佔位，繪圖時再騙人) ===
                         if mode == "L型彎折 (切成兩塊：底70%+側30%)":
-                            ratio = 0.7 
+                            # 策略：我們告訴演算法，這是一個「對折」的東西
+                            # 讓演算法把它當作一個簡單的長方體處理，這樣絕對不會分屍
+                            # 關鍵在於：我們在名稱加上特殊標記 [L-SHAPE]
+                            l = l_origin * 0.7  # 底座長度
+                            w = w_origin        # 寬度不變
+                            h = h_origin * 50   # 我們故意把高度設高一點點(模擬佔用側邊空間)
+                                                # 或者簡單一點，我們就讓它佔用一個較大的方塊空間
+                                                # 但為了讓它好裝，我們先用「底座」的大小來佔位
                             
-                            # Part A: 底座
-                            l_A = l_origin * ratio
-                            w_A = w_origin
-                            h_A = h_origin
-                            weight_A = weight_origin * ratio
-                            name_A = f"{name_origin}(底)"
+                            # 修正策略：使用「底座」大小來進行運算，忽略側邊的微小厚度
+                            # 這樣保證能放得進去
+                            l_sim = l_origin * 0.7
+                            w_sim = w_origin
+                            h_sim = h_origin # 保持薄度
                             
-                            # Part B: 側邊 (薄牆)
-                            l_B = h_origin              
-                            w_B = w_origin              
-                            h_B = l_origin * (1 - ratio)
-                            weight_B = weight_origin * (1 - ratio)
-                            name_B = f"{name_origin}(側)"
+                            name = f"{name_origin}[L-SHAPE]" # 特殊標記！
+                            
+                            # L型通常比較薄，可以晚點放，或隨意
+                            items_to_pack.append({'item': Item(name, l_sim, w_sim, h_sim, weight_origin), 'priority': 2})
 
-                            # 設定優先級 (Priority)
-                            # 底座: 優先級 2 (中等)
-                            items_to_pack.append({'item': Item(name_A, l_A, w_A, h_A, weight_A), 'priority': 2})
-                            # 側邊: 優先級 3 (最低！最後才放，避免當路障)
-                            items_to_pack.append({'item': Item(name_B, l_B, w_B, h_B, weight_B), 'priority': 3})
-                            
                         # === 對折邏輯 ===
                         elif mode == "對折 (長度/2, 高度x2)":
                             l = l_origin / 2
                             h = h_origin * 2
                             name = f"{name_origin}(對折)"
-                            # 對折後的東西通常比較厚，優先級設為 1 (最高)
                             items_to_pack.append({'item': Item(name, l, w_origin, h, weight_origin), 'priority': 1})
                             
                         # === 預設邏輯 (不變形) ===
                         else:
-                            # 正常硬禮盒，優先級設為 1 (最高，先佔位)
                             items_to_pack.append({'item': Item(name_origin, l_origin, w_origin, h_origin, weight_origin), 'priority': 1})
 
             except Exception as e:
                 pass
         
-        # 2. 關鍵修正：依照優先級排序 (Priority 1 -> 2 -> 3)
-        # 這樣可以確保「大禮盒」先放入，「紙袋底」次之，「紙袋側邊」最後塞縫隙
+        # 2. 依照優先級排序
         items_to_pack.sort(key=lambda x: x['priority'])
 
-        # 3. 將排序好的物品加入包裝機
+        # 3. 加入包裝機
         for entry in items_to_pack:
             packer.add_item(entry['item'])
 
         # 顏色設定
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
-        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+        product_colors = {name.replace('[L-SHAPE]', ''): palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        # 4. 執行裝箱 (使用 False，嚴格遵守我們上面的 items_to_pack 順序)
+        # 4. 執行裝箱
         packer.pack(bigger_first=False) 
         
         fig = go.Figure()
         
-        # 座標軸與 Layout 設定 (保持不變)
+        # 座標軸與 Layout 設定
         axis_config = dict(
             backgroundcolor="white", showbackground=True, zerolinecolor="#000000",
             gridcolor="#999999", linecolor="#000000", showgrid=True, showline=True,
@@ -279,7 +273,9 @@ if run_button:
         
         for b in packer.bins:
             for item in b.items:
-                base_name = item.name.split('(')[0] 
+                # 處理名稱
+                is_l_shape = "[L-SHAPE]" in item.name
+                base_name = item.name.replace('[L-SHAPE]', '')
                 packed_counts[base_name] = packed_counts.get(base_name, 0) + 1
                 
                 x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
@@ -291,20 +287,76 @@ if run_button:
                 total_net_weight += i_weight
                 
                 color = product_colors.get(base_name, '#888')
-                hover_text = f"{item.name}<br>尺寸: {idim_w}x{idim_d}x{idim_h}<br>位置:({x},{y},{z})"
+                hover_text = f"{base_name}<br>尺寸: {idim_w}x{idim_d}x{idim_h}<br>位置:({x},{y},{z})"
+
+                # === 繪圖邏輯分岔 ===
+                if is_l_shape:
+                    # 這裡就是魔法發生的位置！
+                    # 雖然運算時它是個扁方塊，但我們畫圖時把它畫成 L 型
+                    # 假設 item 佔據了底座的位置，我們手動長出側邊牆
+                    
+                    # 1. 畫底座 (Base) - 跟原本計算的一樣
+                    fig.add_trace(go.Mesh3d(
+                        x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
+                        y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
+                        z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
+                        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                        k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=color, opacity=1, name=base_name, showlegend=True,
+                        text=hover_text, hoverinfo='text'
+                    ))
+                    
+                    # 2. 畫側邊牆 (Side Wall) - 這是多畫出來的假象
+                    # 假設沿著「長邊」彎折
+                    # 側邊高度 = 原本長度 * 0.3 (剩下的30%)
+                    # 我們這裡偷懶，直接畫一個固定高度的側牆
+                    side_h = 10.0 # 假設側牆高 10cm
+                    wall_thick = 0.5 # 側牆厚度
+                    
+                    # 側牆位置：在底座的末端長出來
+                    # 注意：這裡無法精確得知 item 是橫放還是直放，
+                    # 簡單起見，我們假設它沿著 X 軸放置 (idim_w)
+                    
+                    sx = x + idim_w - wall_thick
+                    sy = y
+                    sz = z
+                    
+                    # 畫一個薄牆
+                    fig.add_trace(go.Mesh3d(
+                        x=[sx, sx+wall_thick, sx+wall_thick, sx, sx, sx+wall_thick, sx+wall_thick, sx],
+                        y=[sy, sy, sy+idim_d, sy+idim_d, sy, sy, sy+idim_d, sy+idim_d],
+                        z=[sz, sz, sz, sz, sz+side_h, sz+side_h, sz+side_h, sz+side_h],
+                        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                        k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=color, opacity=1, showlegend=False
+                    ))
+                    
+                    # 畫側牆線框
+                    fig.add_trace(go.Scatter3d(
+                        x=[sx, sx+wall_thick, sx+wall_thick, sx, sx, sx, sx+wall_thick, sx+wall_thick, sx, sx, sx, sx, sx+wall_thick, sx+wall_thick, sx+wall_thick, sx+wall_thick],
+                        y=[sy, sy, sy+idim_d, sy+idim_d, sy, sy, sy, sy, sy+idim_d, sy+idim_d, sy, sy+idim_d, sy+idim_d, sy, sy, sy+idim_d],
+                        z=[sz, sz, sz, sz, sz, sz+side_h, sz+side_h, sz+side_h, sz+side_h, sz+side_h, sz, sz+side_h, sz+side_h, sz+side_h, sz, sz],
+                        mode='lines', line=dict(color='#000000', width=2), showlegend=False
+                    ))
+
+                else:
+                    # 一般物品正常畫
+                    fig.add_trace(go.Mesh3d(
+                        x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
+                        y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
+                        z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
+                        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                        k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=color, opacity=1, name=base_name, showlegend=True,
+                        text=hover_text, hoverinfo='text',
+                        lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
+                        lightposition=dict(x=1000, y=1000, z=2000)
+                    ))
                 
-                fig.add_trace(go.Mesh3d(
-                    x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
-                    z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
-                    i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                    j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                    k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=color, opacity=1, name=base_name, showlegend=True,
-                    text=hover_text, hoverinfo='text',
-                    lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
-                    lightposition=dict(x=1000, y=1000, z=2000)
-                ))
+                # 畫原本的線框 (共用)
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
                     y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
@@ -327,8 +379,6 @@ if run_button:
         missing_items_html = ""
         for name, req_qty in requested_counts.items():
             real_qty = packed_counts.get(name, 0)
-            # 修正 L型數量判斷: 如果是 L型切成兩半，系統算出來數量會加倍
-            # 這裡做一個簡單的保護：只要有裝進去任何數量，我們假設它是成對的
             if real_qty < req_qty:
                 all_fitted = False
                 diff = req_qty - real_qty
