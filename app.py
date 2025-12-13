@@ -1,8 +1,8 @@
 # =========================================================
 # 3D 裝箱系統（Google Sheet 永久儲存・最穩定版）
-# - 資料改存 Google Sheet（Apps Script API）
-# - data_editor 用「副本編輯」+「按鈕才寫回」→ 不再雙擊、不再型別污染
-# - Streamlit Cloud 重啟也不會掉資料
+# - 加回 50/50 左右雙欄版 & 垂直版切換
+# - 資料存 Google Sheet（Apps Script API）
+# - data_editor 用「副本編輯」+「按鈕才寫回」→ 不再雙擊
 # =========================================================
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ SHEET_BOX = "box_presets"
 SHEET_TPL = "product_templates"
 SHEET_ORD = "orders"
 
-BOX_STATE_KEY = "box_state"  # 外箱整張表存在這個 name 底下（最穩、最省事）
+BOX_STATE_KEY = "box_state"  # 外箱整張表存在這個 name 底下（最穩）
 DEFAULT_BOX_COLS = ["使用", "名稱", "長", "寬", "高", "數量", "空箱重量"]
 DEFAULT_PROD_COLS = ["啟用", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"]
 
@@ -106,7 +106,6 @@ def ensure_box_df(df: pd.DataFrame | None) -> pd.DataFrame:
         df[c] = df[c].apply(_to_float).clip(lower=0)
     df["數量"] = df["數量"].apply(_to_int).clip(lower=0)
 
-    # 清掉空白名稱（保留也可，但我這裡自動補）
     df["名稱"] = df["名稱"].apply(lambda s: s.strip() if isinstance(s, str) else "")
     df.loc[df["名稱"] == "", "名稱"] = "外箱"
 
@@ -156,7 +155,6 @@ def gs_api_call(action: str, sheet: str, name: str = "", payload: dict | None = 
     else:
         r = requests.post(base, params=params, json=payload, timeout=20)
 
-    # Apps Script 回 JSON（ok/ error）
     data = r.json()
     if not data.get("ok", False):
         raise RuntimeError(data.get("error", "Google Sheet API error"))
@@ -186,7 +184,7 @@ def gs_delete(sheet: str, name: str):
     gs_api_call("delete", sheet, name=name)
 
 
-# --- 高階：外箱整張表（最穩） ---
+# --- 外箱整張表 ---
 def load_boxes_from_sheet() -> pd.DataFrame:
     payload = gs_get_payload(SHEET_BOX, BOX_STATE_KEY)
     rows = payload.get("rows", [])
@@ -198,10 +196,9 @@ def save_boxes_to_sheet(df: pd.DataFrame):
     gs_upsert_payload(SHEET_BOX, BOX_STATE_KEY, payload)
 
 
-# --- 商品模板：一個模板一筆 ---
+# --- 商品模板 ---
 def list_templates() -> list[str]:
     names = gs_list_names(SHEET_TPL)
-    # 避免有人誤存 BOX_STATE_KEY 在這張表
     return sorted([n for n in names if n and n != BOX_STATE_KEY])
 
 
@@ -220,16 +217,15 @@ def delete_template(name: str):
     gs_delete(SHEET_TPL, name)
 
 
-# --- 訂單紀錄（可選，用於留存一次計算結果） ---
+# --- 訂單紀錄（留存一次計算結果） ---
 def save_order_snapshot(order_name: str, snapshot: dict):
-    # 用時間當 key，避免覆蓋
     ts = _now_tw().strftime("%Y%m%d_%H%M%S")
     key = f"{order_name}_{ts}"
     gs_upsert_payload(SHEET_ORD, key, snapshot)
 
 
 # =========================================================
-# 3) 裝箱引擎（多策略多次嘗試：穩定、比較像你原本的「智慧擺放」）
+# 3) 裝箱引擎（多策略多次嘗試）
 # =========================================================
 def _collide(a, b) -> bool:
     return not (
@@ -266,7 +262,6 @@ def orientations_6_sorted(l, w, h, box_l, box_w, box_h) -> List[Tuple[float, flo
     for dx, dy, dz in set(permutations([l, w, h], 3)):
         if dx <= box_l and dy <= box_w and dz <= box_h:
             oris.append((float(dx), float(dy), float(dz)))
-    # 低高度優先、底面大優先
     oris.sort(key=lambda t: (t[2], -(t[0] * t[1]), max(t), t[0] * t[1] * t[2]))
     return oris
 
@@ -355,7 +350,6 @@ def best_pack_for_one_bin(items: List[Dict[str, Any]], box: Dict[str, Any], trie
     best = None
     best_metric = None
 
-    # 固定策略
     for sm in score_modes:
         for _, keyfn in order_strategies:
             items_copy = [dict(it) for it in items]
@@ -369,7 +363,6 @@ def best_pack_for_one_bin(items: List[Dict[str, Any]], box: Dict[str, Any], trie
             if best is None or metric < best_metric:
                 best, best_metric = placed, metric
 
-    # 隨機擾動（提高找到更好擺放的機率）
     rng = random.Random(7)
     for _ in range(tries):
         sm = rng.choice(score_modes)
@@ -462,7 +455,6 @@ def build_items_from_df(df: pd.DataFrame, max_bin: Dict[str, Any]):
 
         oris = orientations_6_sorted(l, w, h, maxL, maxW, maxH)
         if not oris:
-            # 單品不可能放進任何箱
             continue
 
         if name not in unique_products:
@@ -618,6 +610,9 @@ def inject_css():
 # 5) 狀態初始化（從 Sheet 讀資料）
 # =========================================================
 def init_state():
+    if "layout_mode" not in st.session_state:
+        st.session_state.layout_mode = "左右 50/50"
+
     if "box_presets" not in st.session_state:
         try:
             df = load_boxes_from_sheet()
@@ -640,8 +635,8 @@ def init_state():
             st.warning(f"模板清單讀取失敗：{e}")
             st.session_state.templates = []
 
-    if "run_pack" not in st.session_state:
-        st.session_state.run_pack = False
+    if "pack_result" not in st.session_state:
+        st.session_state.pack_result = None
 
 
 # =========================================================
@@ -729,19 +724,118 @@ def build_plotly_figure(bins_result, bin_defs_used, unique_products):
 
 
 # =========================================================
-# 7) 主 UI
+# 7) 計算流程（把結果存 session_state.pack_result）
 # =========================================================
-def main():
-    st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
-    inject_css()
+def run_packing_and_store(order_name: str, manual_box: dict):
+    candidate_bins = build_candidate_bins(manual_box, ensure_box_df(st.session_state.box_presets))
+    if not candidate_bins:
+        st.session_state.pack_result = {"error": "請至少勾選 1 種外箱並設定數量 > 0（手動箱或預存箱都可以）。"}
+        return
 
-    st.title("📦 3D裝箱系統（Google Sheet 儲存版）")
-    st.caption("資料永久存到 Google Sheet，多人共用、Streamlit Cloud 重啟也不會掉。")
-    st.markdown("---")
+    max_bin = max(candidate_bins, key=lambda b: b["長"] * b["寬"] * b["高"])
+    items, requested_counts, unique_products, total_qty = build_items_from_df(st.session_state.df, max_bin)
 
-    init_state()
+    if total_qty == 0:
+        st.session_state.pack_result = {"error": "目前沒有任何商品被納入計算（請確認：啟用=勾選 且 數量>0）。"}
+        return
 
-    # ========== 1) 訂單 / 手動箱 ==========
+    one_bin_solution = best_single_bin_if_possible(items, candidate_bins)
+    if one_bin_solution is not None:
+        bins_result = one_bin_solution["bins"]
+        bin_defs_used = one_bin_solution["bin_defs"]
+        remaining = []
+    else:
+        bins_result, bin_defs_used, remaining = pack_with_inventory(items, candidate_bins)
+
+    packed_counts = {}
+    total_vol = 0.0
+    total_net_weight = 0.0
+    for placed in bins_result:
+        for it in placed:
+            packed_counts[it["name"]] = packed_counts.get(it["name"], 0) + 1
+            total_vol += it["dx"] * it["dy"] * it["dz"]
+            total_net_weight += it["weight"]
+
+    used_box_total_vol = sum(b["長"] * b["寬"] * b["高"] for b in bin_defs_used) if bin_defs_used else (max_bin["長"] * max_bin["寬"] * max_bin["高"])
+    used_box_total_weight = sum(_to_float(b.get("空箱重量", 0.0)) for b in bin_defs_used) if bin_defs_used else _to_float(manual_box.get("空箱重量", 0.0))
+    utilization = (total_vol / used_box_total_vol * 100) if used_box_total_vol > 0 else 0.0
+    gross_weight = total_net_weight + used_box_total_weight
+
+    all_fitted = True
+    missing = []
+    for name, req_qty in requested_counts.items():
+        real_qty = packed_counts.get(name, 0)
+        if real_qty < req_qty:
+            all_fitted = False
+            missing.append((name, req_qty - real_qty))
+
+    box_summary = {}
+    for bdef in (bin_defs_used or []):
+        key = f'{bdef["名稱"]} ({bdef["長"]}×{bdef["寬"]}×{bdef["高"]})'
+        box_summary[key] = box_summary.get(key, 0) + 1
+
+    now_str = (_now_tw()).strftime("%Y-%m-%d %H:%M")
+    fig = build_plotly_figure(bins_result, bin_defs_used, unique_products)
+
+    file_time_str = _now_tw().strftime("%Y%m%d_%H%M")
+    file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
+    box_summary_html = "<br>".join([f"{k} × {v} 箱" for k, v in box_summary.items()]) if box_summary else "-"
+
+    full_html_content = f"""
+    <html><head><meta charset="utf-8"><title>裝箱報告 - {order_name}</title></head>
+    <body style="font-family:Arial;background:#f3f4f6;padding:24px;color:#111;">
+      <div style="max-width:1100px;margin:0 auto;background:#fff;padding:24px;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.08);">
+        <h2 style="margin-top:0;">📋 訂單裝箱報告</h2>
+        <p><b>訂單名稱：</b>{order_name}</p>
+        <p><b>計算時間：</b>{now_str} (台灣時間)</p>
+        <p><b>使用外箱：</b><br>{box_summary_html}</p>
+        <p><b>內容淨重：</b>{total_net_weight:.2f} kg</p>
+        <p><b>本次總重：</b>{gross_weight:.2f} kg</p>
+        <p><b>空間利用率：</b>{utilization:.2f}%</p>
+        <hr>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;">
+          {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+        </div>
+      </div>
+    </body></html>
+    """
+
+    # 存 snapshot（不影響主流程）
+    try:
+        snapshot = {
+            "order_name": order_name,
+            "time_tw": now_str,
+            "boxes_used": box_summary,
+            "utilization": utilization,
+            "net_weight": total_net_weight,
+            "gross_weight": gross_weight,
+            "missing": missing,
+        }
+        save_order_snapshot(order_name, snapshot)
+    except Exception:
+        pass
+
+    st.session_state.pack_result = {
+        "error": None,
+        "order_name": order_name,
+        "now_str": now_str,
+        "total_net_weight": total_net_weight,
+        "gross_weight": gross_weight,
+        "utilization": utilization,
+        "missing": missing,
+        "all_fitted": all_fitted,
+        "box_summary": box_summary,
+        "box_summary_html": box_summary_html,
+        "fig": fig,
+        "download_file_name": file_name,
+        "download_html": full_html_content,
+    }
+
+
+# =========================================================
+# 8) UI 區塊：輸入區 / 結果區（給 50/50 或垂直共用）
+# =========================================================
+def render_inputs():
     st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
 
@@ -771,12 +865,11 @@ def main():
         "數量": int(manual_qty),
     }
 
-    # ========== 1b) 外箱管理（最穩 data_editor：副本 + 按鈕寫回） ==========
+    # 外箱管理
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div style="font-weight:900;margin-bottom:8px;">📦 箱型管理（Google Sheet 永久保存）</div>', unsafe_allow_html=True)
 
     left, right = st.columns([1, 2], gap="large")
-
     with left:
         st.caption("新增一筆箱型（新增後可在右側表格直接修改）")
         new_box_name = st.text_input("新箱型名稱", value="", placeholder="例如：A款", key="new_box_name")
@@ -806,13 +899,11 @@ def main():
             st.rerun()
 
         if st.button("🗑️ 刪除勾選的箱型", use_container_width=True):
-            # 實際刪除會用右側 editor 的「刪除」欄
             st.info("請在右側表格勾選『刪除』後，再按『✅ 套用並保存外箱表格』。")
 
         st.markdown("<hr style='border:none;border-top:1px solid #E5E7EB;margin:10px 0;'>", unsafe_allow_html=True)
 
         if st.button("✅ 套用並保存外箱表格", use_container_width=True):
-            # 按下按鈕時，才把 editor 副本寫回（最穩、不雙擊）
             edited = st.session_state.get("box_editor_value")
             if edited is None:
                 st.warning("目前沒有可套用的表格。")
@@ -837,7 +928,6 @@ def main():
 
     with right:
         st.caption("✅ 勾選「使用」= 參與裝箱；「數量」可輸入 0；勾選「刪除」再按『套用保存』")
-
         edit_df = ensure_box_df(st.session_state.box_presets.copy())
         edit_df["刪除"] = False
 
@@ -858,17 +948,14 @@ def main():
             },
             key="box_editor",
         )
-
-        # ✅ 存在 session_state，給左側「套用保存」按鈕用（但不直接寫回主資料）
         st.session_state["box_editor_value"] = edited
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ========== 2) 商品清單 & 模板 ==========
+    # 商品 & 模板
     st.markdown('<div class="section-header">2. 商品清單（模板存 Google Sheet）</div>', unsafe_allow_html=True)
     st.markdown('<div class="panel">', unsafe_allow_html=True)
 
-    # 模板區
     tpl_names = ["(無)"] + st.session_state.templates
     colA, colB = st.columns([2, 2], gap="large")
 
@@ -910,7 +997,6 @@ def main():
 
     st.markdown("<hr style='border:none;border-top:1px solid #E5E7EB;margin:12px 0;'>", unsafe_allow_html=True)
 
-    # 商品表格（可直接編輯，刪除用勾選+按鈕避免回滾感）
     dfp = ensure_product_df(st.session_state.df.copy())
     dfp["刪除"] = False
 
@@ -942,153 +1028,119 @@ def main():
         },
         key="product_editor",
     )
-
-    # 把「刪除」欄去掉後存回商品狀態
     st.session_state.df = ensure_product_df(edited_prod.drop(columns=["刪除"], errors="ignore"))
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ========== 3) 開始計算 ==========
+    # 計算按鈕（不再靠 rerun 二次）
     st.markdown("---")
     if st.button("🚀 開始計算與 3D 模擬", use_container_width=True):
-        st.session_state.run_pack = True
+        with st.spinner("正在進行智慧裝箱運算..."):
+            run_packing_and_store(order_name=order_name, manual_box=manual_box)
+        st.success("✅ 計算完成")
         st.rerun()
 
-    # ========== 4) 報告 + 3D ==========
-    if st.session_state.run_pack:
-        st.session_state.run_pack = False
+    return order_name, manual_box
 
-        candidate_bins = build_candidate_bins(manual_box, ensure_box_df(st.session_state.box_presets))
-        if not candidate_bins:
-            st.error("請至少勾選 1 種外箱並設定數量 > 0（手動箱或預存箱都可以）。")
-            return
 
-        max_bin = max(candidate_bins, key=lambda b: b["長"] * b["寬"] * b["高"])
-        items, requested_counts, unique_products, total_qty = build_items_from_df(st.session_state.df, max_bin)
+def render_results():
+    res = st.session_state.pack_result
+    if not res:
+        st.info("尚未計算。請先按「開始計算與 3D 模擬」。")
+        return
 
-        if total_qty == 0:
-            st.warning("目前沒有任何商品被納入計算（請確認：啟用=勾選 且 數量>0）。")
-            return
+    if res.get("error"):
+        st.error(res["error"])
+        return
 
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+    order_name = res["order_name"]
+    now_str = res["now_str"]
+    total_net_weight = res["total_net_weight"]
+    gross_weight = res["gross_weight"]
+    utilization = res["utilization"]
+    missing = res["missing"]
+    all_fitted = res["all_fitted"]
+    box_summary_html = res["box_summary_html"]
+    fig = res["fig"]
 
-        with st.spinner("正在進行智慧裝箱運算..."):
-            one_bin_solution = best_single_bin_if_possible(items, candidate_bins)
-            if one_bin_solution is not None:
-                bins_result = one_bin_solution["bins"]
-                bin_defs_used = one_bin_solution["bin_defs"]
-                remaining = []
-            else:
-                bins_result, bin_defs_used, remaining = pack_with_inventory(items, candidate_bins)
+    st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
 
-        packed_counts = {}
-        total_vol = 0.0
-        total_net_weight = 0.0
-        for placed in bins_result:
-            for it in placed:
-                packed_counts[it["name"]] = packed_counts.get(it["name"], 0) + 1
-                total_vol += it["dx"] * it["dy"] * it["dz"]
-                total_net_weight += it["weight"]
+    status_html = (
+        "<div style='color:#065F46;background:#D1FAE5;padding:14px;border-radius:12px;text-align:center;border:1px solid #10B981;font-weight:900;font-size:1.1rem;'>✅ 完美！所有商品皆已裝入。</div>"
+        if all_fitted
+        else "<div style='color:#991B1B;background:#FEE2E2;padding:14px;border-radius:12px;border:1px solid #EF4444;font-weight:900;'>❌ 注意：有部分商品裝不下（可能外箱數量不足或尺寸不足）。</div>"
+    )
 
-        used_box_total_vol = sum(b["長"] * b["寬"] * b["高"] for b in bin_defs_used) if bin_defs_used else (max_bin["長"] * max_bin["寬"] * max_bin["高"])
-        used_box_total_weight = sum(_to_float(b.get("空箱重量", 0.0)) for b in bin_defs_used) if bin_defs_used else _to_float(manual_box.get("空箱重量", 0.0))
-        utilization = (total_vol / used_box_total_vol * 100) if used_box_total_vol > 0 else 0.0
-        gross_weight = total_net_weight + used_box_total_weight
+    miss_html = ""
+    if missing:
+        miss_html = "<ul style='padding-left:18px;margin-top:10px;'>" + "".join(
+            [f"<li style='color:#991B1B;background:#FEE2E2;padding:8px;margin:6px 0;border-radius:10px;font-weight:900;'>⚠️ {n}: 遺漏 {d} 個</li>"
+             for n, d in missing]
+        ) + "</ul>"
 
-        all_fitted = True
-        missing = []
-        for name, req_qty in requested_counts.items():
-            real_qty = packed_counts.get(name, 0)
-            if real_qty < req_qty:
-                all_fitted = False
-                missing.append((name, req_qty - real_qty))
+    st.markdown(f"""
+    <div class="panel">
+      <div style="font-weight:900;font-size:1.25rem;border-bottom:3px solid #111827;padding-bottom:10px;margin-bottom:12px;">📋 訂單裝箱報告</div>
+      <div style="display:grid;grid-template-columns:170px 1fr;row-gap:10px;column-gap:10px;font-size:1.05rem;">
+        <div style="font-weight:900;color:#374151;">📝 訂單名稱</div><div style="font-weight:900;color:#1d4ed8;">{order_name}</div>
+        <div style="font-weight:900;color:#374151;">🕒 計算時間</div><div>{now_str} (台灣時間)</div>
+        <div style="font-weight:900;color:#374151;">📦 使用外箱</div><div>{box_summary_html}</div>
+        <div style="font-weight:900;color:#374151;">⚖️ 內容淨重</div><div>{total_net_weight:.2f} kg</div>
+        <div style="font-weight:900;color:#b91c1c;">🚛 本次總重</div><div style="font-weight:900;color:#b91c1c;font-size:1.15rem;">{gross_weight:.2f} kg</div>
+        <div style="font-weight:900;color:#374151;">📊 空間利用率</div><div>{utilization:.2f}%</div>
+      </div>
+      <div style="margin-top:14px;">{status_html}{miss_html}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        # 外箱摘要
-        box_summary = {}
-        for bdef in (bin_defs_used or []):
-            key = f'{bdef["名稱"]} ({bdef["長"]}×{bdef["寬"]}×{bdef["高"]})'
-            box_summary[key] = box_summary.get(key, 0) + 1
-        box_summary_html = "<br>".join([f"{k} × {v} 箱" for k, v in box_summary.items()]) if box_summary else "-"
+    st.download_button(
+        label="📥 下載完整裝箱報告 (.html)",
+        data=res["download_html"],
+        file_name=res["download_file_name"],
+        mime="text/html",
+        use_container_width=True,
+    )
 
-        now_str = _now_tw().strftime("%Y-%m-%d %H:%M")
+    st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
 
-        status_html = (
-            "<div style='color:#065F46;background:#D1FAE5;padding:14px;border-radius:12px;text-align:center;border:1px solid #10B981;font-weight:900;font-size:1.1rem;'>✅ 完美！所有商品皆已裝入。</div>"
-            if all_fitted
-            else "<div style='color:#991B1B;background:#FEE2E2;padding:14px;border-radius:12px;border:1px solid #EF4444;font-weight:900;'>❌ 注意：有部分商品裝不下（可能外箱數量不足或尺寸不足）。</div>"
+
+# =========================================================
+# 9) 主程式：依版面模式渲染
+# =========================================================
+def main():
+    st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
+    inject_css()
+    init_state()
+
+    # Sidebar：版面切換
+    with st.sidebar:
+        st.markdown("## ⚙️ 介面設定")
+        mode = st.radio(
+            "版面模式",
+            options=["左右 50/50", "垂直（上/下）"],
+            index=0 if st.session_state.layout_mode == "左右 50/50" else 1,
         )
+        st.session_state.layout_mode = mode
+        if st.button("🧹 清除本次結果"):
+            st.session_state.pack_result = None
+            st.rerun()
 
-        miss_html = ""
-        if missing:
-            miss_html = "<ul style='padding-left:18px;margin-top:10px;'>" + "".join(
-                [f"<li style='color:#991B1B;background:#FEE2E2;padding:8px;margin:6px 0;border-radius:10px;font-weight:900;'>⚠️ {n}: 遺漏 {d} 個</li>"
-                 for n, d in missing]
-            ) + "</ul>"
+    st.title("📦 3D裝箱系統（Google Sheet 儲存版）")
+    st.caption("可切換：左右 50/50（操作 / 結果）或垂直（上/下）")
 
-        st.markdown(f"""
-        <div class="panel">
-          <div style="font-weight:900;font-size:1.25rem;border-bottom:3px solid #111827;padding-bottom:10px;margin-bottom:12px;">📋 訂單裝箱報告</div>
-          <div style="display:grid;grid-template-columns:170px 1fr;row-gap:10px;column-gap:10px;font-size:1.05rem;">
-            <div style="font-weight:900;color:#374151;">📝 訂單名稱</div><div style="font-weight:900;color:#1d4ed8;">{order_name}</div>
-            <div style="font-weight:900;color:#374151;">🕒 計算時間</div><div>{now_str} (台灣時間)</div>
-            <div style="font-weight:900;color:#374151;">📦 使用外箱</div><div>{box_summary_html}</div>
-            <div style="font-weight:900;color:#374151;">⚖️ 內容淨重</div><div>{total_net_weight:.2f} kg</div>
-            <div style="font-weight:900;color:#b91c1c;">🚛 本次總重</div><div style="font-weight:900;color:#b91c1c;font-size:1.15rem;">{gross_weight:.2f} kg</div>
-            <div style="font-weight:900;color:#374151;">📊 空間利用率</div><div>{utilization:.2f}%</div>
-          </div>
-          <div style="margin-top:14px;">{status_html}{miss_html}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown("---")
 
-        fig = build_plotly_figure(bins_result, bin_defs_used, unique_products)
-
-        # 下載 html 報告
-        tw_time = _now_tw()
-        file_time_str = tw_time.strftime("%Y%m%d_%H%M")
-        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
-
-        full_html_content = f"""
-        <html><head><meta charset="utf-8"><title>裝箱報告 - {order_name}</title></head>
-        <body style="font-family:Arial;background:#f3f4f6;padding:24px;color:#111;">
-          <div style="max-width:1100px;margin:0 auto;background:#fff;padding:24px;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.08);">
-            <h2 style="margin-top:0;">📋 訂單裝箱報告</h2>
-            <p><b>訂單名稱：</b>{order_name}</p>
-            <p><b>計算時間：</b>{now_str} (台灣時間)</p>
-            <p><b>使用外箱：</b><br>{box_summary_html}</p>
-            <p><b>內容淨重：</b>{total_net_weight:.2f} kg</p>
-            <p><b>本次總重：</b>{gross_weight:.2f} kg</p>
-            <p><b>空間利用率：</b>{utilization:.2f}%</p>
-            <hr>
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;">
-              {fig.to_html(include_plotlyjs='cdn', full_html=False)}
-            </div>
-          </div>
-        </body></html>
-        """
-
-        st.download_button(
-            label="📥 下載完整裝箱報告 (.html)",
-            data=full_html_content,
-            file_name=file_name,
-            mime="text/html",
-            use_container_width=True,
-        )
-        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
-
-        # （可選）把本次結果存到 orders（雲端留存）
-        try:
-            snapshot = {
-                "order_name": order_name,
-                "time_tw": now_str,
-                "boxes_used": box_summary,
-                "utilization": utilization,
-                "net_weight": total_net_weight,
-                "gross_weight": gross_weight,
-                "missing": missing,
-            }
-            save_order_snapshot(order_name, snapshot)
-        except Exception:
-            # 不影響主要功能
-            pass
+    if st.session_state.layout_mode == "左右 50/50":
+        left, right = st.columns([1, 1], gap="large")
+        with left:
+            render_inputs()
+        with right:
+            render_results()
+    else:
+        # 垂直上/下
+        render_inputs()
+        st.markdown("---")
+        render_results()
 
 
 if __name__ == "__main__":
