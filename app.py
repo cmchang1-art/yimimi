@@ -3,30 +3,7 @@ import pandas as pd
 from py3dbp import Packer, Bin, Item
 import plotly.graph_objects as go
 import datetime
-
-# ✅ 新增：用來找最佳旋轉方向（只影響判斷擺放）
-from itertools import permutations
-
-def get_best_orientation(l, w, h, box_l, box_w, box_h):
-    """
-    回傳最適合裝箱的 (L, W, H)
-    原則：
-    1) 必須能放進箱子
-    2) 底面積最小優先（鼓勵直立 / 側放）
-    """
-    candidates = []
-    for dims in set(permutations([l, w, h], 3)):
-        dl, dw, dh = dims
-        if dl <= box_l and dw <= box_w and dh <= box_h:
-            base_area = dl * dw
-            candidates.append((base_area, dims))
-
-    if not candidates:
-        return (l, w, h)  # 放不下就原樣
-
-    candidates.sort(key=lambda x: x[0])  # 底面積最小優先
-    return candidates[0][1]
-
+import copy  # 新增引用，用於深層複製物件
 
 # ==========================
 # 頁面設定
@@ -78,7 +55,7 @@ st.markdown("""
 
     /* 6. 報表卡片樣式 */
     .report-card {
-        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
         padding: 20px; 
         border: 2px solid #e0e0e0; 
         border-radius: 10px; 
@@ -164,80 +141,116 @@ with b2:
 # ==========================
 if run_button:
     with st.spinner('正在進行智慧裝箱運算...'):
-        max_weight_limit = 999999
-        packer = Packer()
-        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
-        packer.add_bin(box)
         
+        # 準備資料與變數
+        max_weight_limit = 999999
         requested_counts = {}
         unique_products = []
         total_qty = 0
-        total_net_weight = 0
         
-if run_button:
-    with st.spinner('正在進行智慧裝箱運算...'):
-        max_weight_limit = 999999
-        packer = Packer()
-        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
-        packer.add_bin(box)
-        
-        requested_counts = {}
-        unique_products = []
-        total_qty = 0
-        total_net_weight = 0
-        
-        # ==========================================
-        # 修改開始：增加排序邏輯 (解決紙袋放不下的問題)
-        # ==========================================
-        
-        # 1. 先計算每個商品的「底面積」(長 x 寬)
-        #    我們希望底面積大的(如紙袋)先被處理，鋪在最下面
+        # 1. 預處理：排序
+        #    保留您的邏輯：先計算底面積，大底面積先放 (解決紙袋問題)
         edited_df['base_area'] = edited_df['長'] * edited_df['寬']
-        
-        # 2. 依照底面積由大到小排序 (ascending=False)
         sorted_df = edited_df.sort_values(by='base_area', ascending=False)
-
-        # 3. 使用排序後的 sorted_df 進行迴圈
+        
+        # 統計需求總量
         for index, row in sorted_df.iterrows():
-            try:
-                name = str(row["商品名稱"])
-                l = float(row["長"])
-                w = float(row["寬"])
-                h = float(row["高"])
-                weight = float(row["重量(kg)"])
-                qty = int(row["數量"])
-                
-                if qty > 0:
-                    total_qty += qty
-                    if name not in requested_counts:
-                        requested_counts[name] = 0
-                        unique_products.append(name)
-                    requested_counts[name] += qty
+            name = str(row["商品名稱"])
+            qty = int(row["數量"])
+            if qty > 0:
+                total_qty += qty
+                if name not in requested_counts:
+                    requested_counts[name] = 0
+                    unique_products.append(name)
+                requested_counts[name] += qty
+
+        # ==========================================
+        # 智慧運算核心：多模式嘗試 (Smart Retry Logic)
+        # ==========================================
+        
+        def try_pack(orientation_mode=0):
+            """
+            嘗試進行裝箱
+            orientation_mode: 
+               0 = 預設 (平放)
+               1 = 側放 (將高度轉為寬度)
+               2 = 直立 (將高度轉為長度)
+            """
+            local_packer = Packer()
+            # 建立箱子
+            local_box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
+            local_packer.add_bin(local_box)
+            
+            for index, row in sorted_df.iterrows():
+                try:
+                    name = str(row["商品名稱"])
+                    l_orig = float(row["長"])
+                    w_orig = float(row["寬"])
+                    h_orig = float(row["高"])
+                    weight = float(row["重量(kg)"])
+                    qty = int(row["數量"])
                     
+                    # 判斷是否為「扁平物」(如紙袋)，如果是，強制保持原樣，不旋轉
+                    # 判斷標準：如果高度明顯小於長寬 (例如小於 1/5)，視為扁平物
+                    is_flat_item = (h_orig < l_orig * 0.2) and (h_orig < w_orig * 0.2)
+                    
+                    # 決定傳入 Packer 的尺寸
+                    if is_flat_item or orientation_mode == 0:
+                        # 模式0或扁平物：維持原樣 (L, W, H)
+                        final_l, final_w, final_h = l_orig, w_orig, h_orig
+                    elif orientation_mode == 1:
+                        # 模式1：嘗試側放 (L, H, W) -> 讓原本的高變成寬，引導 Packer 嘗試側立
+                        final_l, final_w, final_h = l_orig, h_orig, w_orig
+                    elif orientation_mode == 2:
+                        # 模式2：嘗試直立 (H, W, L)
+                        final_l, final_w, final_h = h_orig, w_orig, l_orig
+                        
                     for _ in range(qty):
-                        # ✅ 只改這裡：加入前先挑最佳方向（鼓勵直立/側放）
-                        best_l, best_w, best_h = get_best_orientation(
-                            l, w, h, box_l, box_w, box_h
-                        )
-                        item = Item(name, best_l, best_w, best_h, weight)
-                        packer.add_item(item)
-            except:
-                pass
+                        # 注意：這裡雖然改變輸入尺寸順序，py3dbp 內部還是會嘗試旋轉
+                        # 但改變輸入順序可以改變 Greedy 演算法的「首選」方向
+                        item = Item(name, final_l, final_w, final_h, weight)
+                        local_packer.add_item(item)
+                except:
+                    pass
+            
+            # 執行裝箱
+            # bigger_first=False 是為了尊重我們依照「底面積」排好的順序 (紙袋先)
+            local_packer.pack(bigger_first=False)
+            return local_packer
 
-        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
-        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
-
-        # 4. 關鍵修改：將 bigger_first 設為 False
-        #    這樣系統就會乖乖依照我們上面排好的順序(紙袋先)進行裝箱
-        packer.pack(bigger_first=False) 
+        # 開始嘗試不同策略，找出最佳解
+        best_packer = None
+        best_fitted_count = -1
+        
+        # 依序嘗試： 0=預設, 1=側放優先, 2=直立優先
+        # 這樣如果預設平放就裝得下，就會直接用預設的
+        modes_to_try = [0, 1, 2] 
+        
+        for mode in modes_to_try:
+            current_packer = try_pack(mode)
+            
+            # 計算裝入的數量
+            fitted_count = 0
+            for b in current_packer.bins:
+                fitted_count += len(b.items)
+            
+            # 如果這個模式裝入的比較多，或者一樣多但我們還沒找到最佳解，就暫存它
+            if fitted_count > best_fitted_count:
+                best_fitted_count = fitted_count
+                best_packer = current_packer
+            
+            # 如果已經全部裝下了，就不用再試其他模式了，省時間
+            if best_fitted_count == total_qty:
+                break
+        
+        # 最終確認使用的 Packer
+        packer = best_packer if best_packer else try_pack(0)
         
         # ==========================================
-        # 修改結束
+        # 運算結束，準備繪圖
         # ==========================================
 
         fig = go.Figure()
-        # (下方繪圖程式碼保持不變...)
-        
         
         # 1. 座標軸樣式 (強制黑色)
         axis_config = dict(
@@ -252,7 +265,7 @@ if run_button:
             title=dict(font=dict(color="black", size=14, family="Arial Black"))
         )
         
-        # 修改區塊：調整 layout 設定以符合截圖需求
+        # 修改區塊：調整 layout 設定
         fig.update_layout(
             template="plotly_white", # 強制白底
             font=dict(color="black"), # 全局黑色字體
@@ -264,16 +277,16 @@ if run_button:
                 yaxis={**axis_config, 'title': '寬 (W)'},
                 zaxis={**axis_config, 'title': '高 (H)'},
                 aspectmode='data',
-                # 新增：設定相機視角，模擬圖片中的等角視圖 (Isometric View)
+                # 設定相機視角，模擬等角視圖
                 camera=dict(
                     eye=dict(x=1.6, y=1.6, z=1.6)
                 )
             ),
             margin=dict(t=30, b=0, l=0, r=0), 
-            height=600, # 稍微增高讓顯示更清楚
-            # 修改：圖例位置調整至左上角
+            height=600, 
+            # 圖例位置調整至左上角
             legend=dict(
-                x=0, y=1, # 強制左上角
+                x=0, y=1, 
                 xanchor="left",
                 yanchor="top",
                 font=dict(color="black", size=13),
@@ -291,8 +304,13 @@ if run_button:
         ))
 
         total_vol = 0
+        total_net_weight = 0
         packed_counts = {}
         
+        # 顏色設定
+        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
+        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+
         for b in packer.bins:
             for item in b.items:
                 packed_counts[item.name] = packed_counts.get(item.name, 0) + 1
@@ -323,7 +341,7 @@ if run_button:
                 ))
                 fig.add_trace(go.Scatter3d(
                     x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
+                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d, y, y, y+idim_d],
                     z=[z, z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z, z+idim_h, z+idim_h, z+idim_h, z, z],
                     mode='lines', line=dict(color='#000000', width=2), showlegend=False
                 ))
@@ -368,7 +386,6 @@ if run_button:
         st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
         st.markdown(report_html, unsafe_allow_html=True)
 
-        
         full_html_content = f"""
         <html>
         <head>
@@ -397,6 +414,4 @@ if run_button:
             type="primary"
         )
 
-        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
-        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
         st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
