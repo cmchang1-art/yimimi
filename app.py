@@ -3,28 +3,41 @@ import pandas as pd
 from py3dbp import Packer, Bin, Item
 import plotly.graph_objects as go
 import datetime
-
-# ✅ 新增：用來找最佳旋轉方向（只影響判斷擺放）
 from itertools import permutations
 
-def get_best_orientation(l, w, h, box_l, box_w, box_h):
-    """
-    回傳最適合裝箱的 (L, W, H)
-    原則：
-    1) 必須能放進箱子
-    2) 底面積最小優先（鼓勵直立 / 側放）
-    """
+# ==========================
+# 智慧判斷核心（只影響演算法）
+# ==========================
+
+def is_foldable_item(l, w, h):
+    return min(l, w, h) <= 0.5
+
+def is_unstable_item(l, w, h):
+    base = max(l, w)
+    return h > base * 1.5
+
+def get_best_orientation_advanced(l, w, h, box_l, box_w, box_h, layer=0):
     candidates = []
     for dims in set(permutations([l, w, h], 3)):
         dl, dw, dh = dims
         if dl <= box_l and dw <= box_w and dh <= box_h:
             base_area = dl * dw
-            candidates.append((base_area, dims))
+            height = dh
+
+            stability = base_area
+            efficiency = 1 / height if height > 0 else 0
+
+            if layer == 0:
+                score = stability * 0.7 + efficiency * 0.3
+            else:
+                score = stability * 0.3 + efficiency * 0.7
+
+            candidates.append((score, dims))
 
     if not candidates:
-        return (l, w, h)  # 放不下就原樣
+        return (l, w, h)
 
-    candidates.sort(key=lambda x: x[0])  # 底面積最小優先
+    candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
 
 
@@ -34,369 +47,176 @@ def get_best_orientation(l, w, h, box_l, box_w, box_h):
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：強制介面修復
+# CSS
 # ==========================
 st.markdown("""
 <style>
-    /* 1. 全域設定：強制白底黑字 */
-    .stApp {
-        background-color: #ffffff !important;
-        color: #000000 !important;
-    }
-    
-    /* 2. 徹底隱藏側邊欄與相關按鈕 */
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="stSidebarCollapsedControl"] { display: none !important; }
-    
-    /* 3. 隱藏官方雜訊 */
-    [data-testid="stDecoration"] { display: none !important; }
-    .stDeployButton { display: none !important; }
-    footer { display: none !important; }
-    #MainMenu { display: none !important; }
-    [data-testid="stToolbar"] { display: none !important; }
-    [data-testid="stHeader"] { background-color: transparent !important; pointer-events: none; }
-
-    /* 4. 輸入框優化 */
-    div[data-baseweb="input"] input,
-    div[data-baseweb="select"] div,
-    .stDataFrame, .stTable {
-        color: #000000 !important;
-        background-color: #f9f9f9 !important;
-        border-color: #cccccc !important;
-    }
-    
-    /* 5. 區塊標題優化 */
-    .section-header {
-        font-size: 1.2rem;
-        font-weight: bold;
-        color: #333;
-        margin-top: 10px;
-        margin-bottom: 5px;
-        border-left: 5px solid #FF4B4B;
-        padding-left: 10px;
-    }
-
-    /* 6. 報表卡片樣式 */
-    .report-card {
-        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
-        padding: 20px; 
-        border: 2px solid #e0e0e0; 
-        border-radius: 10px; 
-        background: #ffffff; 
-        color: #333333; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
-    }
-    
-    /* 7. 圖表樣式 */
-    .js-plotly-plot .plotly .bg { fill: #ffffff !important; }
-    .xtick text, .ytick text, .ztick text {
-        fill: #000000 !important;
-        font-weight: bold !important;
-    }
-    
-    /* 8. 調整頂部間距 */
-    .block-container {
-        padding-top: 2rem !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
+.stApp { background-color:#fff !important; color:#000 !important; }
+[data-testid="stSidebar"], footer, #MainMenu { display:none !important; }
+.section-header {
+    font-size:1.2rem;font-weight:bold;border-left:5px solid #FF4B4B;
+    padding-left:10px;margin:10px 0;
+}
+.report-card {
+    padding:20px;border:2px solid #e0e0e0;border-radius:10px;
+    background:#fff;box-shadow:0 4px 6px rgba(0,0,0,0.05);
+}
 </style>
 """, unsafe_allow_html=True)
 
-# 修改標題
 st.title("📦 3D裝箱系統")
 st.markdown("---")
 
 # ==========================
-# 上半部：輸入區域
+# 上半部：輸入
 # ==========================
-
 col_left, col_right = st.columns([1, 2], gap="large")
 
 with col_left:
     st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
-    
-    with st.container():
-        order_name = st.text_input("訂單名稱", value="訂單_20241208")
-        
-        st.caption("外箱尺寸 (cm)")
-        c1, c2, c3 = st.columns(3)
-        box_l = c1.number_input("長", value=35.0, step=1.0)
-        box_w = c2.number_input("寬", value=25.0, step=1.0)
-        box_h = c3.number_input("高", value=20.0, step=1.0)
-        
-        box_weight = st.number_input("空箱重量 (kg)", value=0.5, step=0.1)
+    order_name = st.text_input("訂單名稱", value="訂單_20241208")
+
+    st.caption("外箱尺寸 (cm)")
+    c1, c2, c3 = st.columns(3)
+    box_l = c1.number_input("長", value=35.0)
+    box_w = c2.number_input("寬", value=25.0)
+    box_h = c3.number_input("高", value=20.0)
+
+    box_weight = st.number_input("空箱重量 (kg)", value=0.5)
 
 with col_right:
     st.markdown('<div class="section-header">2. 商品清單 (直接編輯表格)</div>', unsafe_allow_html=True)
-    
     if 'df' not in st.session_state:
-        st.session_state.df = pd.DataFrame(
-            [
-                {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5},
-                {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5},
-            ]
-        )
+        st.session_state.df = pd.DataFrame([
+            {"商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5},
+            {"商品名稱": "紙袋", "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05, "數量": 5},
+        ])
 
     edited_df = st.data_editor(
         st.session_state.df,
         num_rows="dynamic",
         use_container_width=True,
-        height=280,
-        column_config={
-            "數量": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
-            "長": st.column_config.NumberColumn(format="%.1f"),
-            "寬": st.column_config.NumberColumn(format="%.1f"),
-            "高": st.column_config.NumberColumn(format="%.1f"),
-            "重量(kg)": st.column_config.NumberColumn(format="%.2f"),
-        }
+        height=260
     )
 
 st.markdown("---")
-
-b1, b2, b3 = st.columns([1, 2, 1])
-with b2:
-    run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
+run_button = st.button("🚀 開始計算與 3D 模擬", use_container_width=True)
 
 # ==========================
-# 下半部：運算邏輯與結果
+# 下半部：運算
 # ==========================
 if run_button:
-    with st.spinner('正在進行智慧裝箱運算...'):
-        max_weight_limit = 999999
+    with st.spinner("正在進行智慧裝箱運算..."):
         packer = Packer()
-        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
-        packer.add_bin(box)
-        
+        max_weight_limit = 999999
+
+        # ✅ 多箱自動拆箱
+        for i in range(30):
+            packer.add_bin(Bin(f"Box_{i+1}", box_l, box_w, box_h, max_weight_limit))
+
         requested_counts = {}
         unique_products = []
         total_qty = 0
         total_net_weight = 0
-        
-if run_button:
-    with st.spinner('正在進行智慧裝箱運算...'):
-        max_weight_limit = 999999
-        packer = Packer()
-        box = Bin('StandardBox', box_l, box_w, box_h, max_weight_limit)
-        packer.add_bin(box)
-        
-        requested_counts = {}
-        unique_products = []
-        total_qty = 0
-        total_net_weight = 0
-        
-        # ==========================================
-        # 修改開始：增加排序邏輯 (解決紙袋放不下的問題)
-        # ==========================================
-        
-        # 1. 先計算每個商品的「底面積」(長 x 寬)
-        #    我們希望底面積大的(如紙袋)先被處理，鋪在最下面
+
         edited_df['base_area'] = edited_df['長'] * edited_df['寬']
-        
-        # 2. 依照底面積由大到小排序 (ascending=False)
         sorted_df = edited_df.sort_values(by='base_area', ascending=False)
 
-        # 3. 使用排序後的 sorted_df 進行迴圈
-        for index, row in sorted_df.iterrows():
-            try:
-                name = str(row["商品名稱"])
-                l = float(row["長"])
-                w = float(row["寬"])
-                h = float(row["高"])
-                weight = float(row["重量(kg)"])
-                qty = int(row["數量"])
-                
-                if qty > 0:
-                    total_qty += qty
-                    if name not in requested_counts:
-                        requested_counts[name] = 0
-                        unique_products.append(name)
-                    requested_counts[name] += qty
-                    
-                    for _ in range(qty):
-                        # ✅ 只改這裡：加入前先挑最佳方向（鼓勵直立/側放）
-                        best_l, best_w, best_h = get_best_orientation(
-                            l, w, h, box_l, box_w, box_h
-                        )
-                        item = Item(name, best_l, best_w, best_h, weight)
-                        packer.add_item(item)
-            except:
-                pass
+        for _, row in sorted_df.iterrows():
+            name = str(row["商品名稱"])
+            l, w, h = float(row["長"]), float(row["寬"]), float(row["高"])
+            weight = float(row["重量(kg)"])
+            qty = int(row["數量"])
 
-        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
-        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+            if name not in unique_products:
+                unique_products.append(name)
+                requested_counts[name] = 0
 
-        # 4. 關鍵修改：將 bigger_first 設為 False
-        #    這樣系統就會乖乖依照我們上面排好的順序(紙袋先)進行裝箱
-        packer.pack(bigger_first=False) 
-        
-        # ==========================================
-        # 修改結束
-        # ==========================================
+            for _ in range(qty):
+                foldable = is_foldable_item(l, w, h)
+                unstable = is_unstable_item(l, w, h)
 
-        fig = go.Figure()
-        # (下方繪圖程式碼保持不變...)
-        
-        
-        # 1. 座標軸樣式 (強制黑色)
-        axis_config = dict(
-            backgroundcolor="white",
-            showbackground=True,
-            zerolinecolor="#000000",
-            gridcolor="#999999",
-            linecolor="#000000",
-            showgrid=True,
-            showline=True,
-            tickfont=dict(color="black", size=12, family="Arial Black"),
-            title=dict(font=dict(color="black", size=14, family="Arial Black"))
-        )
-        
-        # 修改區塊：調整 layout 設定以符合截圖需求
-        fig.update_layout(
-            template="plotly_white", # 強制白底
-            font=dict(color="black"), # 全局黑色字體
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            autosize=True, 
-            scene=dict(
-                xaxis={**axis_config, 'title': '長 (L)'},
-                yaxis={**axis_config, 'title': '寬 (W)'},
-                zaxis={**axis_config, 'title': '高 (H)'},
-                aspectmode='data',
-                # 新增：設定相機視角，模擬圖片中的等角視圖 (Isometric View)
-                camera=dict(
-                    eye=dict(x=1.6, y=1.6, z=1.6)
+                best_l, best_w, best_h = get_best_orientation_advanced(
+                    l, w, h, box_l, box_w, box_h, layer=0
                 )
-            ),
-            margin=dict(t=30, b=0, l=0, r=0), 
-            height=600, # 稍微增高讓顯示更清楚
-            # 修改：圖例位置調整至左上角
-            legend=dict(
-                x=0, y=1, # 強制左上角
-                xanchor="left",
-                yanchor="top",
-                font=dict(color="black", size=13),
-                bgcolor="rgba(255,255,255,0.8)",
-                bordercolor="#000000",
-                borderwidth=1
-            )
-        )
+
+                if foldable:
+                    dims = sorted([l, w, h])
+                    best_l, best_w, best_h = dims[2], dims[1], dims[0]
+
+                item = Item(name, best_l, best_w, best_h, weight)
+                packer.add_item(item)
+
+                requested_counts[name] += 1
+                total_qty += 1
+
+        packer.pack(bigger_first=False)
+
+        # ==========================
+        # 3D 繪圖
+        # ==========================
+        fig = go.Figure()
 
         fig.add_trace(go.Scatter3d(
-            x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
-            y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
-            z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='#000000', width=6), name='外箱'
+            x=[0, box_l, box_l, 0, 0, 0, box_l, box_l],
+            y=[0, 0, box_w, box_w, 0, 0, 0, box_w],
+            z=[0, 0, 0, 0, box_h, box_h, box_h, box_h],
+            mode='lines', line=dict(color='black', width=6), name='外箱'
         ))
 
-        total_vol = 0
+        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD']
+        colors = {n: palette[i % len(palette)] for i, n in enumerate(unique_products)}
+
         packed_counts = {}
-        
+
         for b in packer.bins:
             for item in b.items:
                 packed_counts[item.name] = packed_counts.get(item.name, 0) + 1
-                
-                x, y, z = float(item.position[0]), float(item.position[1]), float(item.position[2])
-                dim = item.get_dimension()
-                idim_w, idim_d, idim_h = float(dim[0]), float(dim[1]), float(dim[2])
-                i_weight = float(item.weight)
-                
-                total_vol += (idim_w * idim_d * idim_h)
-                total_net_weight += i_weight
-                
-                color = product_colors.get(item.name, '#888')
-                # 提示文字
-                hover_text = f"{item.name}<br>實際佔用: {idim_w}x{idim_d}x{idim_h}<br>重量: {i_weight:.2f}kg<br>位置:({x},{y},{z})"
-                
+                x, y, z = map(float, item.position)
+                w, d, h = map(float, item.get_dimension())
+                total_net_weight += item.weight
+
                 fig.add_trace(go.Mesh3d(
-                    x=[x, x+idim_w, x+idim_w, x, x, x+idim_w, x+idim_w, x],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y+idim_d, y+idim_d],
-                    z=[z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h],
-                    i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                    j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                    k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                    color=color, opacity=1, name=item.name, showlegend=True,
-                    text=hover_text, hoverinfo='text',
-                    lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5), 
-                    lightposition=dict(x=1000, y=1000, z=2000)
-                ))
-                fig.add_trace(go.Scatter3d(
-                    x=[x, x+idim_w, x+idim_w, x, x, x, x+idim_w, x+idim_w, x, x, x, x, x+idim_w, x+idim_w, x+idim_w, x+idim_w],
-                    y=[y, y, y+idim_d, y+idim_d, y, y, y, y, y+idim_d, y+idim_d, y, y+idim_d, y+idim_d, y, y, y+idim_d],
-                    z=[z, z, z, z, z, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z+idim_h, z, z+idim_h, z+idim_h, z+idim_h, z, z],
-                    mode='lines', line=dict(color='#000000', width=2), showlegend=False
+                    x=[x, x+w, x+w, x, x, x+w, x+w, x],
+                    y=[y, y, y+d, y+d, y, y, y+d, y+d],
+                    z=[z, z, z, z, z+h, z+h, z+h, z+h],
+                    color=colors[item.name],
+                    opacity=0.95,
+                    name=item.name
                 ))
 
-        names = set()
-        fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
-        
-        box_vol = box_l * box_w * box_h
-        utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
-        gross_weight = total_net_weight + box_weight
-        
-        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-        now_str = tw_time.strftime("%Y-%m-%d %H:%M")
-        file_time_str = tw_time.strftime("%Y%m%d_%H%M")
-        
-        all_fitted = True
-        missing_items_html = ""
-        for name, req_qty in requested_counts.items():
-            real_qty = packed_counts.get(name, 0)
-            if real_qty < req_qty:
-                all_fitted = False
-                diff = req_qty - real_qty
-                missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
-
-        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
-
-        report_html = f"""
-        <div class="report-card">
-            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
-            <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
-                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
-            </table>
-            {status_html}
-        </div>
-        """
-
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        st.markdown(report_html, unsafe_allow_html=True)
-
-        
-        full_html_content = f"""
-        <html>
-        <head>
-            <title>裝箱報告 - {order_name}</title>
-            <meta charset="utf-8">
-        </head>
-        <body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 30px; color: #333;">
-            <div style="max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                {report_html.replace('class="report-card"', '')}
-                <div style="margin-top: 30px;">
-                    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">🧊 3D 模擬視圖</h3>
-                    {fig.to_html(include_plotlyjs='cdn', full_html=False)}
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
-        
-        st.download_button(
-            label="📥 下載完整裝箱報告 (.html)",
-            data=full_html_content,
-            file_name=file_name,
-            mime="text/html",
-            type="primary"
+        fig.update_layout(
+            scene=dict(
+                xaxis_title="長", yaxis_title="寬", zaxis_title="高",
+                aspectmode="data",
+                camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
+            ),
+            height=600,
+            margin=dict(l=0, r=0, b=0, t=30)
         )
 
-        # 3. 關鍵修正：這裡加上 theme=None，告訴 Streamlit 不要雞婆覆蓋我的顏色
-        # 4. 關鍵修正：加上 config={'displayModeBar': False} 移除那個會遮擋的工具列
-        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
+        # ==========================
+        # 報表
+        # ==========================
+        box_vol = box_l * box_w * box_h
+        utilization = sum(
+            float(item.get_dimension()[0]) *
+            float(item.get_dimension()[1]) *
+            float(item.get_dimension()[2])
+            for b in packer.bins for item in b.items
+        ) / box_vol * 100
+
+        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+
+        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="report-card">
+        <b>訂單：</b>{order_name}<br>
+        <b>時間：</b>{tw_time.strftime('%Y-%m-%d %H:%M')}<br>
+        <b>箱數：</b>{len([b for b in packer.bins if b.items])}<br>
+        <b>總重：</b>{total_net_weight + box_weight:.2f} kg<br>
+        <b>空間利用率：</b>{utilization:.2f}%
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.plotly_chart(fig, use_container_width=True, theme=None)
