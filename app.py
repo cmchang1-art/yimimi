@@ -1,796 +1,994 @@
-import os
-import json
-from datetime import datetime
-from itertools import combinations
-from copy import deepcopy
-
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import datetime
+import math
+import json
+import os
+from itertools import permutations
 import plotly.graph_objects as go
-from py3dbp import Packer, Bin, Item
+import time
 
-
-# =========================
-# 基本設定
-# =========================
-st.set_page_config(page_title="3D裝箱系統", layout="wide", initial_sidebar_state="collapsed")
-
+# ==========================
+# 檔案持久化（本機 JSON）
+# ==========================
 DATA_DIR = "data"
-BOXES_FILE = os.path.join(DATA_DIR, "boxes.json")                 # 儲存箱型清單（永久）
-PRODUCTS_FILE = os.path.join(DATA_DIR, "products.json")           # 儲存商品清單（永久）
-PRODUCT_TPL_FILE = os.path.join(DATA_DIR, "product_templates.json")  # 商品模板（永久）
+BOX_FILE = os.path.join(DATA_DIR, "box_presets.json")
+TPL_FILE = os.path.join(DATA_DIR, "product_templates.json")
 
-
-# =========================
-# 工具：資料讀寫
-# =========================
-def ensure_data_dir():
+def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
-def safe_load_json(path, default):
+def _load_json(path, default):
     try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
+        if not os.path.exists(path):
+            return default
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return default
+
+def _save_json(path, data):
+    try:
+        _ensure_data_dir()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except:
         pass
-    return deepcopy(default)
 
-def safe_save_json(path, data):
-    ensure_data_dir()
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def toast_ok(msg):
+# ==========================
+# 安全轉型
+# ==========================
+def _to_float(x, default=0.0):
     try:
-        st.toast(msg, icon="✅")
-    except Exception:
-        st.success(msg)
+        if x is None:
+            return float(default)
+        if isinstance(x, (int, float)):
+            if isinstance(x, float) and (math.isnan(x) or math.isinf(x)):
+                return float(default)
+            return float(x)
+        s = str(x).strip()
+        if s == "" or s.lower() in ("nan", "none", "null", "inf", "-inf"):
+            return float(default)
+        v = float(s)
+        if math.isnan(v) or math.isinf(v):
+            return float(default)
+        return v
+    except:
+        return float(default)
 
-def toast_warn(msg):
+def _to_int(x, default=0):
     try:
-        st.toast(msg, icon="⚠️")
-    except Exception:
-        st.warning(msg)
+        if x is None:
+            return int(default)
+        if isinstance(x, bool):
+            return int(default)
+        if isinstance(x, int):
+            return int(x)
+        if isinstance(x, float):
+            if math.isnan(x) or math.isinf(x):
+                return int(default)
+            return int(x)
+        s = str(x).strip()
+        if s == "" or s.lower() in ("nan", "none", "null"):
+            return int(default)
+        return int(float(s))
+    except:
+        return int(default)
 
+def _now_tw():
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
 
-# =========================
-# CSS：白底、按鈕配色分級、移除怪條、避免黑底
-# =========================
-st.markdown(
-    """
-<style>
-/* 全域白底黑字 */
-.stApp { background: #ffffff !important; color: #111111 !important; }
-h1,h2,h3,h4,h5,h6,p,span,label,small,div { color: #111111; }
-
-/* 移除頁面裝飾 / menu */
-[data-testid="stDecoration"], footer, #MainMenu { display:none !important; }
-
-/* 標題樣式（左紅線、不要黑底） */
-.section-title{
-  font-weight: 800;
-  font-size: 1.1rem;
-  padding: 0.2rem 0 0.2rem 0.7rem;
-  border-left: 5px solid #ff4b4b;
-  margin: 0.6rem 0 0.4rem 0;
-}
-
-/* 避免出現你說的「奇怪圓角長條」：不使用 marker div 方式 */
-div._no_marker { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
-
-/* Button 基礎 */
-.stButton>button{
-  border-radius: 10px !important;
-  font-weight: 800 !important;
-  border: 1px solid rgba(0,0,0,0.08) !important;
-  padding: 0.55rem 0.9rem !important;
-}
-
-/* 按鈕配色分級 */
-.btn-add .stButton>button{ background:#d1fae5 !important; color:#065f46 !important; }   /* 淡綠 */
-.btn-del .stButton>button{ background:#fee2e2 !important; color:#7f1d1d !important; }   /* 淡紅 */
-.btn-save .stButton>button{ background:#dbeafe !important; color:#1e3a8a !important; }  /* 淡藍 */
-.btn-load .stButton>button{ background:#f3f4f6 !important; color:#374151 !important; }  /* 淡灰 */
-.btn-run  .stButton>button{ background:#dcfce7 !important; color:#166534 !important; font-size: 1.05rem !important; } /* 計算淡綠醒目 */
-
-/* info 區塊 */
-.helpbox{
-  background:#eff6ff;
-  border:1px solid #bfdbfe;
-  color:#0f172a;
-  padding:0.8rem 0.9rem;
-  border-radius:12px;
-  margin-top:0.6rem;
-  line-height:1.55;
-}
-
-/* Plotly 白底 */
-[data-testid="stPlotlyChart"]{ background:#ffffff !important; }
-.js-plotly-plot, .plotly, .main-svg{ background:#ffffff !important; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-
-# =========================
-# 初始化 SessionState（首次讀檔）
-# =========================
-if "order_name" not in st.session_state:
-    st.session_state.order_name = "訂單_20241208"
-
-if "boxes" not in st.session_state:
-    # boxes: list[ {use, name, l, w, h, empty_weight, qty} ]
-    st.session_state.boxes = safe_load_json(BOXES_FILE, [])
-
-if "products" not in st.session_state:
-    # products: list[ {use, name, l, w, h, weight, qty} ]
-    st.session_state.products = safe_load_json(PRODUCTS_FILE, [])
-
-if "product_templates" not in st.session_state:
-    # templates: dict[str] -> list[product_rows]
-    st.session_state.product_templates = safe_load_json(PRODUCT_TPL_FILE, {})
-
-if "layout_mode" not in st.session_state:
-    st.session_state.layout_mode = "左右 50% / 50%"
-
-if "last_result" not in st.session_state:
-    st.session_state.last_result = None  # 存 pack 結果
-
-
-# =========================
-# 版面配置
-# =========================
-st.title("📦 3D裝箱系統")
-
-st.markdown('<div class="section-title">版面配置</div>', unsafe_allow_html=True)
-st.session_state.layout_mode = st.radio(
-    "",
-    ["左右 50% / 50%", "上下（垂直）"],
-    index=0 if st.session_state.layout_mode == "左右 50% / 50%" else 1,
-    horizontal=True,
-)
-
-def two_panes():
-    if st.session_state.layout_mode == "左右 50% / 50%":
-        return st.columns([1, 1], gap="large")
-    else:
-        c1 = st.container()
-        c2 = st.container()
-        return c1, c2
-
-left, right = two_panes()
-
-
-# =========================
-# Section 1：訂單與外箱設定
-# =========================
-with left:
-    st.markdown('<div class="section-title">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
-
-    st.session_state.order_name = st.text_input("訂單名稱", value=st.session_state.order_name)
-
-    # ---- 手動 Key-in 外箱（可選擇是否參與裝箱）----
-    st.caption("外箱尺寸（cm）- 手動 Key in（可選擇是否參與裝箱）")
-    use_manual_box = st.checkbox("使用手動箱", value=True)
-    c1, c2, c3 = st.columns(3)
-    manual_l = c1.number_input("長", min_value=1.0, value=35.0, step=1.0)
-    manual_w = c2.number_input("寬", min_value=1.0, value=25.0, step=1.0)
-    manual_h = c3.number_input("高", min_value=1.0, value=20.0, step=1.0)
-    manual_empty_weight = st.number_input("空箱重量 (kg)", min_value=0.0, value=0.50, step=0.05)
-    c4, c5 = st.columns([1, 2])
-    manual_qty = c4.number_input("手動箱數量", min_value=0, value=1, step=1)
-    manual_name = c5.text_input("手動箱命名", value="手動箱")
-
-    # ---- 箱型管理（永久保存）----
-    st.markdown('<div class="section-title">箱型管理（新增 / 修改 / 刪除 / 勾選使用）</div>', unsafe_allow_html=True)
-
-    # 新增箱型表單
-    with st.form("add_box_form", clear_on_submit=True):
-        n = st.text_input("新增箱型名稱")
-        b1, b2, b3 = st.columns(3)
-        nl = b1.number_input("新增_長", min_value=1.0, value=45.0, step=1.0)
-        nw = b2.number_input("新增_寬", min_value=1.0, value=30.0, step=1.0)
-        nh = b3.number_input("新增_高", min_value=1.0, value=30.0, step=1.0)
-        new_empty_w = st.number_input("新增_空箱重量(kg)", min_value=0.0, value=0.50, step=0.05)
-        new_qty = st.number_input("新增_數量", min_value=0, value=1, step=1)
-
-        st.markdown('<div class="btn-add">', unsafe_allow_html=True)
-        add_box_btn = st.form_submit_button("➕ 新增箱型")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        if add_box_btn:
-            if not n.strip():
-                toast_warn("請輸入箱型名稱")
-            else:
-                st.session_state.boxes.append({
-                    "use": True,
-                    "name": n.strip(),
-                    "l": float(nl),
-                    "w": float(nw),
-                    "h": float(nh),
-                    "empty_weight": float(new_empty_w),
-                    "qty": int(new_qty),
-                    "delete": False,
-                })
-                safe_save_json(BOXES_FILE, st.session_state.boxes)
-                toast_ok("已新增箱型並永久保存")
-
-    # 箱型列表（可直接修改）
-    if len(st.session_state.boxes) == 0:
-        st.info("尚未建立箱型。你可以使用上方『新增箱型』建立多個箱型，並設定數量與是否參與裝箱。")
-    else:
-        df_boxes = pd.DataFrame(st.session_state.boxes)
-        # 保底欄位
-        for col, default in [("use", True), ("delete", False), ("qty", 1), ("empty_weight", 0.5)]:
-            if col not in df_boxes.columns:
-                df_boxes[col] = default
-
-        st.caption("勾選「use」= 參與裝箱；「qty」可輸入 0；勾選「delete」後按刪除")
-        edited_boxes = st.data_editor(
-            df_boxes,
-            use_container_width=True,
-            hide_index=True,
-            num_rows="fixed",
-            column_config={
-                "use": st.column_config.CheckboxColumn("使用", help="勾選後此箱型才參與裝箱"),
-                "name": st.column_config.TextColumn("名稱"),
-                "l": st.column_config.NumberColumn("長", min_value=1.0),
-                "w": st.column_config.NumberColumn("寬", min_value=1.0),
-                "h": st.column_config.NumberColumn("高", min_value=1.0),
-                "qty": st.column_config.NumberColumn("數量", min_value=0, step=1),
-                "empty_weight": st.column_config.NumberColumn("空箱重(kg)", min_value=0.0, step=0.05),
-                "delete": st.column_config.CheckboxColumn("刪除", help="勾選後可批次刪除"),
-            },
-            key="boxes_editor",
-        )
-
-        # 操作按鈕：儲存/刪除
-        cbtn1, cbtn2 = st.columns([1, 1])
-        with cbtn1:
-            st.markdown('<div class="btn-save">', unsafe_allow_html=True)
-            save_boxes_btn = st.button("💾 儲存箱型變更", key="save_boxes_btn")
-            st.markdown("</div>", unsafe_allow_html=True)
-        with cbtn2:
-            st.markdown('<div class="btn-del">', unsafe_allow_html=True)
-            del_boxes_btn = st.button("🗑️ 刪除勾選箱型", key="del_boxes_btn")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        if save_boxes_btn:
-            with st.spinner("儲存中..."):
-                st.session_state.boxes = edited_boxes.to_dict("records")
-                # 清掉不存在欄位
-                for r in st.session_state.boxes:
-                    r.setdefault("use", True)
-                    r.setdefault("delete", False)
-                    r["qty"] = int(r.get("qty", 0) or 0)
-                    r["l"] = float(r.get("l", 1))
-                    r["w"] = float(r.get("w", 1))
-                    r["h"] = float(r.get("h", 1))
-                    r["empty_weight"] = float(r.get("empty_weight", 0.0) or 0.0)
-                safe_save_json(BOXES_FILE, st.session_state.boxes)
-            toast_ok("箱型變更已保存")
-
-        if del_boxes_btn:
-            with st.spinner("刪除中..."):
-                rows = edited_boxes.to_dict("records")
-                rows = [r for r in rows if not r.get("delete")]
-                st.session_state.boxes = rows
-                safe_save_json(BOXES_FILE, st.session_state.boxes)
-            toast_ok("已刪除勾選箱型")
-
-    st.markdown(
-        """
-        <div class="helpbox">
-        <b>外箱操作說明：</b><br>
-        1) <b>手動箱</b>：勾選「使用手動箱」後，手動箱會加入裝箱。數量可輸入 0。<br>
-        2) <b>箱型管理</b>：新增後會永久保存（data/boxes.json）。<br>
-        3) <b>使用</b>：勾選後才參與裝箱；<b>數量</b>可為 0（代表不提供此箱型）。<br>
-        4) <b>修改</b>：直接在表格改數值，按「儲存箱型變更」。<br>
-        5) <b>刪除</b>：勾選「刪除」欄位後按「刪除勾選箱型」。<br>
-        </div>
-        """,
-        unsafe_allow_html=True,
+# ==========================
+# 幾何：碰撞/盒內/點覆蓋
+# ==========================
+def _collide(a, b):
+    return not (
+        a["x"] + a["dx"] <= b["x"] or
+        b["x"] + b["dx"] <= a["x"] or
+        a["y"] + a["dy"] <= b["y"] or
+        b["y"] + b["dy"] <= a["y"] or
+        a["z"] + a["dz"] <= b["z"] or
+        b["z"] + b["dz"] <= a["z"]
     )
 
+def _inside_box(x, y, z, dx, dy, dz, L, W, H):
+    return (x >= 0 and y >= 0 and z >= 0 and
+            x + dx <= L and y + dy <= W and z + dz <= H)
 
-# =========================
-# Section 2：商品清單
-# =========================
-with right:
-    st.markdown('<div class="section-title">2. 商品清單（直接編輯表格）</div>', unsafe_allow_html=True)
+def _point_is_covered(px, py, pz, placed):
+    for b in placed:
+        if (b["x"] <= px < b["x"] + b["dx"] and
+            b["y"] <= py < b["y"] + b["dy"] and
+            b["z"] <= pz < b["z"] + b["dz"]):
+            return True
+    return False
 
-    # ---- 商品模板：載入 / 儲存 / 刪除（永久）----
-    tpl_names = ["(無)"] + sorted(list(st.session_state.product_templates.keys()))
+# ==========================
+# 旋轉候選：6 rotations
+# ==========================
+def orientations_6(l, w, h, box_l, box_w, box_h):
+    l = max(_to_float(l), 0.0)
+    w = max(_to_float(w), 0.0)
+    h = max(_to_float(h), 0.0)
+    if l <= 0 or w <= 0 or h <= 0:
+        return []
+    oris = []
+    for dx, dy, dz in set(permutations([l, w, h], 3)):
+        if dx <= box_l and dy <= box_w and dz <= box_h:
+            oris.append((dx, dy, dz))
+    return oris
 
-    ctpl1, ctpl2, ctpl3 = st.columns([2, 1, 1])
-    selected_tpl = ctpl1.selectbox("商品初始值模板", tpl_names, index=0)
-    new_tpl_name = ctpl2.text_input("另存模板名稱", value="")
-    del_tpl_name = ctpl3.selectbox("要刪除的模板", ["(無)"] + sorted(list(st.session_state.product_templates.keys())), index=0)
+# ==========================
+# Corner-first Extreme Points 裝一箱
+# ==========================
+def pack_one_bin(items, box):
+    L, W, H = box["長"], box["寬"], box["高"]
+    placed = []
+    points = {(0.0, 0.0, 0.0)}
 
-    cb1, cb2, cb3 = st.columns([1, 1, 1])
-    with cb1:
-        st.markdown('<div class="btn-load">', unsafe_allow_html=True)
-        load_tpl_btn = st.button("⬇️ 載入", key="load_tpl_btn")
-        st.markdown("</div>", unsafe_allow_html=True)
+    def score_candidate(x, y, z, dx, dy, dz):
+        base = dx * dy
+        return (z, y, x, -base, dz)
 
-    with cb2:
-        st.markdown('<div class="btn-save">', unsafe_allow_html=True)
-        save_tpl_btn = st.button("💾 儲存", key="save_tpl_btn")
-        st.markdown("</div>", unsafe_allow_html=True)
+    for it in items:
+        best = None
+        best_s = None
 
-    with cb3:
-        st.markdown('<div class="btn-del">', unsafe_allow_html=True)
-        del_tpl_btn = st.button("🗑️ 刪除模板", key="del_tpl_btn")
-        st.markdown("</div>", unsafe_allow_html=True)
+        pts = sorted(points, key=lambda p: (p[2], p[1], p[0]))  # z,y,x
+        for (px, py, pz) in pts:
+            if _point_is_covered(px, py, pz, placed):
+                continue
 
-    if load_tpl_btn:
-        with st.spinner("讀入中..."):
-            if selected_tpl == "(無)":
-                toast_warn("請先選擇要載入的模板")
-            else:
-                st.session_state.products = deepcopy(st.session_state.product_templates[selected_tpl])
-                safe_save_json(PRODUCTS_FILE, st.session_state.products)  # 也同步成目前清單
-                toast_ok(f"已載入模板：{selected_tpl}")
+            for (dx, dy, dz) in it["oris"]:
+                if not _inside_box(px, py, pz, dx, dy, dz, L, W, H):
+                    continue
+                cand = {"x": px, "y": py, "z": pz, "dx": dx, "dy": dy, "dz": dz}
+                if any(_collide(cand, p) for p in placed):
+                    continue
 
-    if save_tpl_btn:
-        with st.spinner("儲存中..."):
-            name = new_tpl_name.strip()
-            if not name:
-                toast_warn("請輸入要儲存的模板名稱")
-            else:
-                st.session_state.product_templates[name] = deepcopy(st.session_state.products)
-                safe_save_json(PRODUCT_TPL_FILE, st.session_state.product_templates)
-                toast_ok(f"已儲存模板：{name}")
+                s = score_candidate(px, py, pz, dx, dy, dz)
+                if best is None or s < best_s:
+                    best = cand
+                    best_s = s
 
-    if del_tpl_btn:
-        with st.spinner("刪除中..."):
-            if del_tpl_name == "(無)":
-                toast_warn("請選擇要刪除的模板")
-            else:
-                st.session_state.product_templates.pop(del_tpl_name, None)
-                safe_save_json(PRODUCT_TPL_FILE, st.session_state.product_templates)
-                toast_ok(f"已刪除模板：{del_tpl_name}")
+        if best is None:
+            it["placed"] = False
+            continue
 
-    # ---- 商品新增 ----
-    st.markdown('<div class="section-title">商品管理（新增 / 修改 / 刪除 / 勾選是否計算）</div>', unsafe_allow_html=True)
+        it["placed"] = True
+        it["x"], it["y"], it["z"] = best["x"], best["y"], best["z"]
+        it["dx"], it["dy"], it["dz"] = best["dx"], best["dy"], best["dz"]
 
-    with st.form("add_product_form", clear_on_submit=True):
-        pname = st.text_input("新增商品名稱")
-        p1, p2, p3 = st.columns(3)
-        pl = p1.number_input("長", min_value=0.1, value=21.0, step=0.1)
-        pw = p2.number_input("寬", min_value=0.1, value=14.0, step=0.1)
-        ph = p3.number_input("高", min_value=0.1, value=8.5, step=0.1)
-        pweight = st.number_input("重量(kg)", min_value=0.0, value=0.50, step=0.01)
-        pqty = st.number_input("數量（可為 0）", min_value=0, value=1, step=1)
+        placed.append({
+            "_id": it["_id"],
+            "name": it["name"],
+            "x": it["x"], "y": it["y"], "z": it["z"],
+            "dx": it["dx"], "dy": it["dy"], "dz": it["dz"],
+            "weight": it["weight"],
+        })
 
-        st.markdown('<div class="btn-add">', unsafe_allow_html=True)
-        add_product_btn = st.form_submit_button("➕ 新增商品")
-        st.markdown("</div>", unsafe_allow_html=True)
+        new_pts = [
+            (it["x"] + it["dx"], it["y"], it["z"]),
+            (it["x"], it["y"] + it["dy"], it["z"]),
+            (it["x"], it["y"], it["z"] + it["dz"]),
+        ]
+        for nx, ny, nz in new_pts:
+            if nx <= L and ny <= W and nz <= H:
+                points.add((float(nx), float(ny), float(nz)))
 
-        if add_product_btn:
-            if not pname.strip():
-                toast_warn("請輸入商品名稱")
-            else:
-                st.session_state.products.append({
-                    "use": True,
-                    "name": pname.strip(),
-                    "l": float(pl),
-                    "w": float(pw),
-                    "h": float(ph),
-                    "weight": float(pweight),
-                    "qty": int(pqty),
-                    "delete": False,
-                })
-                safe_save_json(PRODUCTS_FILE, st.session_state.products)
-                toast_ok("已新增商品並永久保存")
+        points = {p for p in points if not _point_is_covered(p[0], p[1], p[2], placed)}
 
-    # ---- 商品列表（可直接改 + 可刪除列）----
-    if len(st.session_state.products) == 0:
-        st.info("尚未建立商品。你可以用上方『新增商品』加入，也可儲存為模板。")
-    else:
-        df_prod = pd.DataFrame(st.session_state.products)
-        for col, default in [("use", True), ("delete", False), ("qty", 0), ("weight", 0.0)]:
-            if col not in df_prod.columns:
-                df_prod[col] = default
+    return placed
 
-        st.caption("提示：數量可為 0（代表不計算）；或取消勾選「使用」也不計算。")
-        edited_prod = st.data_editor(
-            df_prod,
-            use_container_width=True,
-            hide_index=True,
-            num_rows="fixed",
-            column_config={
-                "use": st.column_config.CheckboxColumn("啟用", help="勾選且數量>0 才會參與裝箱"),
-                "name": st.column_config.TextColumn("商品名稱"),
-                "l": st.column_config.NumberColumn("長", min_value=0.1),
-                "w": st.column_config.NumberColumn("寬", min_value=0.1),
-                "h": st.column_config.NumberColumn("高", min_value=0.1),
-                "weight": st.column_config.NumberColumn("重量(kg)", min_value=0.0, step=0.01),
-                "qty": st.column_config.NumberColumn("數量", min_value=0, step=1),
-                "delete": st.column_config.CheckboxColumn("刪除", help="勾選後可批次刪除"),
-            },
-            key="prod_editor",
-        )
-
-        cbtn1, cbtn2 = st.columns([1, 1])
-        with cbtn1:
-            st.markdown('<div class="btn-save">', unsafe_allow_html=True)
-            save_prod_btn = st.button("💾 儲存商品變更", key="save_prod_btn")
-            st.markdown("</div>", unsafe_allow_html=True)
-        with cbtn2:
-            st.markdown('<div class="btn-del">', unsafe_allow_html=True)
-            del_prod_btn = st.button("🗑️ 刪除勾選商品", key="del_prod_btn")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        if save_prod_btn:
-            with st.spinner("儲存中..."):
-                st.session_state.products = edited_prod.to_dict("records")
-                for r in st.session_state.products:
-                    r.setdefault("use", True)
-                    r.setdefault("delete", False)
-                    r["qty"] = int(r.get("qty", 0) or 0)
-                    r["l"] = float(r.get("l", 0.1))
-                    r["w"] = float(r.get("w", 0.1))
-                    r["h"] = float(r.get("h", 0.1))
-                    r["weight"] = float(r.get("weight", 0.0) or 0.0)
-                safe_save_json(PRODUCTS_FILE, st.session_state.products)
-            toast_ok("商品變更已保存")
-
-        if del_prod_btn:
-            with st.spinner("刪除中..."):
-                rows = edited_prod.to_dict("records")
-                rows = [r for r in rows if not r.get("delete")]
-                st.session_state.products = rows
-                safe_save_json(PRODUCTS_FILE, st.session_state.products)
-            toast_ok("已刪除勾選商品")
-
-    st.markdown(
-        """
-        <div class="helpbox">
-        <b>商品操作說明：</b><br>
-        1) <b>啟用</b>：勾選且數量 > 0 才會參與裝箱。<br>
-        2) <b>數量可為 0</b>：快速排除不想計算的品項。<br>
-        3) <b>修改</b>：直接在表格改數值，按「儲存商品變更」。<br>
-        4) <b>刪除</b>：勾選「刪除」欄位後按「刪除勾選商品」。<br>
-        5) <b>模板</b>：可把目前商品清單永久存成模板、日後一鍵載入。<br>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# =========================
-# 裝箱演算法：挑最少箱數 + 再比總箱體積
-# =========================
-def expand_bins(manual_on, manual_name, L, W, H, empty_w, manual_qty, saved_boxes_rows):
+# ==========================
+# 遵循箱型庫存：嚴格用「你勾選 + 你數量」
+# ==========================
+def build_candidate_bins(manual_box, saved_boxes_df):
     bins = []
-    # 手動箱
-    if manual_on and manual_qty > 0:
-        for i in range(int(manual_qty)):
-            bins.append({
-                "id": f"{manual_name}_{i+1}",
-                "name": manual_name,
-                "l": float(L),
-                "w": float(W),
-                "h": float(H),
-                "empty_weight": float(empty_w),
-                "source": "manual",
-            })
-    # 儲存箱型
-    for r in saved_boxes_rows:
-        if not r.get("use"):
-            continue
-        qty = int(r.get("qty", 0) or 0)
-        if qty <= 0:
-            continue
-        for i in range(qty):
-            bins.append({
-                "id": f"{r['name']}_{i+1}",
-                "name": r["name"],
-                "l": float(r["l"]),
-                "w": float(r["w"]),
-                "h": float(r["h"]),
-                "empty_weight": float(r.get("empty_weight", 0.0) or 0.0),
-                "source": "saved",
-            })
+
+    if manual_box.get("使用", False):
+        qty = max(_to_int(manual_box.get("數量", 0)), 0)
+        if qty > 0:
+            for _ in range(qty):
+                bins.append({
+                    "來源": "手動",
+                    "名稱": manual_box.get("名稱", "手動箱"),
+                    "長": _to_float(manual_box["長"]),
+                    "寬": _to_float(manual_box["寬"]),
+                    "高": _to_float(manual_box["高"]),
+                    "空箱重量": _to_float(manual_box.get("空箱重量", 0.0)),
+                })
+
+    if saved_boxes_df is not None and len(saved_boxes_df) > 0:
+        for _, r in saved_boxes_df.iterrows():
+            if not bool(r.get("使用", False)):
+                continue
+            qty = max(_to_int(r.get("數量", 0)), 0)
+            if qty <= 0:
+                continue
+            for _ in range(qty):
+                bins.append({
+                    "來源": "預存",
+                    "名稱": str(r.get("名稱", "外箱")).strip() or "外箱",
+                    "長": _to_float(r.get("長", 0)),
+                    "寬": _to_float(r.get("寬", 0)),
+                    "高": _to_float(r.get("高", 0)),
+                    "空箱重量": _to_float(r.get("空箱重量", 0.0)),
+                })
+
+    bins = [b for b in bins if b["長"] > 0 and b["寬"] > 0 and b["高"] > 0]
     return bins
 
-def expand_items(products_rows):
+# ==========================
+# 商品：只取 啟用=是 且 數量>0
+# ==========================
+def build_items_from_df(df, max_bin):
+    maxL, maxW, maxH = max_bin["長"], max_bin["寬"], max_bin["高"]
+
     items = []
-    for r in products_rows:
-        if not r.get("use"):
+    requested_counts = {}
+    unique_products = []
+    total_qty = 0
+    _id_counter = 1
+
+    df2 = df.copy()
+    if "啟用" not in df2.columns:
+        df2["啟用"] = True
+    if "刪除" not in df2.columns:
+        df2["刪除"] = False
+
+    for c in ["長","寬","高","重量(kg)"]:
+        if c not in df2.columns:
+            df2[c] = 0.0
+    if "數量" not in df2.columns:
+        df2["數量"] = 0
+
+    df2["長"] = df2["長"].apply(_to_float)
+    df2["寬"] = df2["寬"].apply(_to_float)
+    df2["高"] = df2["高"].apply(_to_float)
+    df2["重量(kg)"] = df2["重量(kg)"].apply(_to_float)
+    df2["數量"] = df2["數量"].apply(_to_int)
+
+    df2["base_area"] = df2["長"] * df2["寬"]
+    df2["volume"] = df2["長"] * df2["寬"] * df2["高"]
+    df2 = df2.sort_values(by=["base_area", "volume"], ascending=[False, False])
+
+    for _, r in df2.iterrows():
+        if not bool(r.get("啟用", True)):
             continue
-        qty = int(r.get("qty", 0) or 0)
+
+        name = str(r.get("商品名稱", "")).strip()
+        if not name:
+            continue
+
+        qty = _to_int(r.get("數量", 0))
         if qty <= 0:
             continue
+
+        l = _to_float(r.get("長", 0))
+        w = _to_float(r.get("寬", 0))
+        h = _to_float(r.get("高", 0))
+        weight = _to_float(r.get("重量(kg)", 0))
+
+        if l <= 0 or w <= 0 or h <= 0:
+            continue
+
+        oris = orientations_6(l, w, h, maxL, maxW, maxH)
+        if not oris:
+            oris = []
+
+        requested_counts[name] = requested_counts.get(name, 0) + qty
+        if name not in unique_products:
+            unique_products.append(name)
+
+        total_qty += qty
         for _ in range(qty):
             items.append({
-                "name": r["name"],
-                "l": float(r["l"]),
-                "w": float(r["w"]),
-                "h": float(r["h"]),
-                "weight": float(r.get("weight", 0.0) or 0.0),
+                "_id": _id_counter,
+                "name": name,
+                "l": l, "w": w, "h": h,
+                "weight": weight,
+                "oris": oris
             })
-    return items
+            _id_counter += 1
 
-def try_pack_with_bins(bins_subset, items):
-    packer = Packer()
-    for b in bins_subset:
-        packer.add_bin(Bin(b["id"], b["l"], b["w"], b["h"], b["empty_weight"]))
-    for it in items:
-        packer.add_item(Item(it["name"], it["l"], it["w"], it["h"], it["weight"]))
-    packer.pack(bigger_first=True)
-    # 檢查是否全部裝入
-    fitted = sum(len(b.items) for b in packer.bins)
-    return packer, fitted
+    return items, requested_counts, unique_products, total_qty
 
-def choose_best_bins(all_bins, items):
-    """
-    目標：
-    1) 使用箱數最少
-    2) 若箱數相同 → 總箱體積更小（更省空間、更不浪費）
-    """
-    if len(items) == 0:
-        return [], None, 0
+# ==========================
+# 一箱判斷：庫存箱中找得到且最省空間的那一箱
+# ==========================
+def best_single_bin_if_possible(items, candidate_bins):
+    total_items = len(items)
+    best = None
+    best_metric = None
 
-    if len(all_bins) == 0:
-        return [], None, 0
+    strategies = [
+        ("base_area", lambda it: -(it["l"] * it["w"])),
+        ("volume", lambda it: -(it["l"] * it["w"] * it["h"])),
+        ("max_edge", lambda it: -max(it["l"], it["w"], it["h"])),
+    ]
 
-    # 先依箱體積由小到大排序（因為要找最少箱數，且同箱數希望體積小）
-    bins_sorted = sorted(all_bins, key=lambda b: (b["l"] * b["w"] * b["h"], b["l"], b["w"], b["h"]))
+    for b in candidate_bins:
+        for _, keyfn in strategies:
+            items_copy = [dict(it) for it in items]
+            items_copy.sort(key=keyfn)
 
-    best = None  # (k, total_volume, packer, bins_used)
-    max_bins = len(bins_sorted)
+            placed = pack_one_bin(items_copy, b)
+            if len(placed) == total_items:
+                used_vol = sum(p["dx"] * p["dy"] * p["dz"] for p in placed)
+                bin_vol = b["長"] * b["寬"] * b["高"]
+                waste = bin_vol - used_vol
 
-    # 逐步嘗試：1 箱、2 箱、3 箱...
-    for k in range(1, max_bins + 1):
-        # 組合數可能爆炸 → 做一個保護（尤其箱很多時）
-        # 這裡採「偏小體積優先」：只取前 N 個箱候選做組合（通常已足夠）
-        CAND_LIMIT = 18  # 可視需求調整：越大越慢、越準
-        cand = bins_sorted[:min(CAND_LIMIT, len(bins_sorted))]
+                metric = (bin_vol, waste)
+                if best is None or metric < best_metric:
+                    best = {"bins": [placed], "bin_defs": [b], "unplaced": []}
+                    best_metric = metric
 
-        # k 太大時組合數爆掉，直接退回貪婪（用最小體積前 k 個）
-        if len(cand) >= 18 and k >= 6:
-            subset = cand[:k]
-            packer, fitted = try_pack_with_bins(subset, items)
-            if fitted == len(items):
-                total_vol = sum(b["l"] * b["w"] * b["h"] for b in subset)
-                return subset, packer, fitted
-            continue
+    return best
 
-        # 正常組合嘗試
-        for subset in combinations(cand, k):
-            subset = list(subset)
-            packer, fitted = try_pack_with_bins(subset, items)
-            if fitted == len(items):
-                total_vol = sum(b["l"] * b["w"] * b["h"] for b in subset)
-                cand_best = (k, total_vol, packer, subset)
-                if best is None or cand_best[:2] < best[:2]:
-                    best = cand_best
+# ==========================
+# 多箱：依照庫存箱清單逐箱填（用完就沒了）
+# ==========================
+def pack_with_inventory(items, inventory_bins):
+    remaining = [dict(it) for it in items]
+    bins_result = []
+    bin_defs_used = []
 
-        if best is not None:
-            return best[3], best[2], len(items)
+    strategies = [
+        ("base_area", lambda it: -(it["l"] * it["w"])),
+        ("volume", lambda it: -(it["l"] * it["w"] * it["h"])),
+        ("max_edge", lambda it: -max(it["l"], it["w"], it["h"])),
+    ]
 
-    # 沒找到完整可裝的方案
-    # 回傳「用所有箱去裝」的結果（至少知道裝了多少）
-    packer, fitted = try_pack_with_bins(bins_sorted, items)
-    return bins_sorted, packer, fitted
+    available_bins = list(inventory_bins)
 
+    while remaining and available_bins:
+        best_choice = None
+        best_metric = None
+        remaining_ids = set(it["_id"] for it in remaining)
 
-# =========================
-# 3D 畫 cuboid（每個箱分開擺）
-# =========================
-def cuboid_mesh(x0, y0, z0, dx, dy, dz, color, opacity, name):
-    # 8 vertices
-    x = [x0, x0+dx, x0+dx, x0,   x0, x0+dx, x0+dx, x0]
-    y = [y0, y0,   y0+dy, y0+dy, y0, y0,   y0+dy, y0+dy]
-    z = [z0, z0,   z0,    z0,    z0+dz, z0+dz, z0+dz, z0+dz]
+        for idx, b in enumerate(available_bins):
+            best_for_this_bin = None
+            best_for_this_metric = None
 
-    # 12 triangles (two per face)
-    I = [0,0,0,  1,1,2,  4,4,5,  7,7,6]
-    J = [1,2,3,  2,5,3,  5,6,6,  6,3,2]
-    K = [2,3,0,  5,6,7,  6,7,4,  3,0,1]
+            for _, keyfn in strategies:
+                items_copy = [dict(it) for it in remaining]
+                items_copy.sort(key=keyfn)
 
-    return go.Mesh3d(
-        x=x, y=y, z=z,
-        i=I, j=J, k=K,
-        color=color,
-        opacity=opacity,
-        name=name,
-        flatshading=True,
-        showscale=False
+                placed = pack_one_bin(items_copy, b)
+                if not placed:
+                    continue
+
+                fitted = len(placed)
+                used_vol = sum(p["dx"] * p["dy"] * p["dz"] for p in placed)
+                bin_vol = b["長"] * b["寬"] * b["高"]
+                waste = bin_vol - used_vol
+
+                m = (-fitted, bin_vol, waste)
+                if best_for_this_bin is None or m < best_for_this_metric:
+                    best_for_this_bin = placed
+                    best_for_this_metric = m
+
+            if best_for_this_bin is None:
+                continue
+
+            fitted = len(best_for_this_bin)
+            used_vol = sum(p["dx"] * p["dy"] * p["dz"] for p in best_for_this_bin)
+            bin_vol = b["長"] * b["寬"] * b["高"]
+            waste = bin_vol - used_vol
+
+            metric = (-fitted, bin_vol, waste, idx)
+            if best_choice is None or metric < best_metric:
+                best_choice = (idx, b, best_for_this_bin)
+                best_metric = metric
+
+        if best_choice is None:
+            break
+
+        idx, chosen_bin, placed = best_choice
+        bins_result.append(placed)
+        bin_defs_used.append(chosen_bin)
+
+        placed_ids = set(p["_id"] for p in placed).intersection(remaining_ids)
+        remaining = [it for it in remaining if it["_id"] not in placed_ids]
+
+        available_bins.pop(idx)
+
+    return bins_result, bin_defs_used, remaining
+
+# ==========================
+# UI
+# ==========================
+st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
+
+# ✅ UI 修正：按鈕分色 + Plotly 強制白底
+st.markdown("""
+<style>
+  .stApp { background:#ffffff !important; color:#111 !important; }
+  [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stDecoration"],
+  .stDeployButton, footer, #MainMenu, [data-testid="stToolbar"] { display:none !important; }
+  [data-testid="stHeader"] { background-color:transparent !important; pointer-events:none; }
+
+  .section-header{
+    font-size:1.15rem; font-weight:900; color:#111;
+    margin:10px 0 6px 0; border-left:5px solid #FF4B4B; padding-left:10px;
+  }
+  .stCaption, .stMarkdown, label, p, span, small { color:#111 !important; }
+
+  [data-testid="stExpander"]>details>summary{
+    background:#F3F4F6 !important;
+    color:#111 !important;
+    border-radius:12px !important;
+    padding:10px 12px !important;
+    font-weight:900 !important;
+    border:1px solid #E5E7EB !important;
+  }
+  [data-testid="stExpander"]>details>summary svg{ color:#111 !important; }
+
+  div[data-testid="stDataFrame"]{
+    background:#0B1220 !important;
+    border-radius:12px !important;
+    border:1px solid rgba(255,255,255,0.12) !important;
+    overflow:hidden !important;
+  }
+  div[data-testid="stDataFrame"] * { color:#E5E7EB !important; }
+
+  div[data-baseweb="input"] input{
+    background:#fff !important;
+    color:#111 !important;
+    border:1px solid #D1D5DB !important;
+    border-radius:10px !important;
+  }
+  div[data-baseweb="select"]>div{
+    background:#fff !important;
+    color:#111 !important;
+    border:1px solid #D1D5DB !important;
+    border-radius:10px !important;
+  }
+
+  .panel{
+    background:#FFFFFF;
+    border:1px solid #E5E7EB;
+    border-radius:14px;
+    padding:14px 14px 10px 14px;
+    box-shadow:0 6px 18px rgba(0,0,0,0.04);
+    margin-bottom:12px;
+  }
+
+  /* ✅ 按鈕預設中性 */
+  .stButton>button{
+    background:#F3F4F6 !important; color:#111 !important;
+    border:1px solid #D1D5DB !important;
+    border-radius:12px !important;
+    font-weight:900 !important;
+    padding:10px 14px !important;
+  }
+
+  /* ✅ 你指定的分級配色（用 marker class 精準套到下一個 button） */
+  .btn-add + div.stButton > button{
+    background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
+  }
+  .btn-del + div.stButton > button{
+    background:#FEE2E2 !important; border-color:#EF4444 !important; color:#991B1B !important;
+  }
+  .btn-save + div.stButton > button{
+    background:#DBEAFE !important; border-color:#3B82F6 !important; color:#1E3A8A !important;
+  }
+  .btn-load + div.stButton > button{
+    background:#E5E7EB !important; border-color:#9CA3AF !important; color:#111827 !important;
+  }
+  .btn-run + div.stButton > button{
+    background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
+  }
+
+  /* ✅ Plotly 強制白底：解黑底 */
+  [data-testid="stPlotlyChart"]{
+    background:#ffffff !important;
+    border-radius:14px !important;
+    border:1px solid #E5E7EB !important;
+    padding:10px !important;
+  }
+  .js-plotly-plot, .plotly, .main-svg{
+    background:#ffffff !important;
+  }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📦 3D裝箱系統")
+st.markdown("---")
+
+# ==========================
+# Session init（含持久化載入）
+# ==========================
+if "box_presets" not in st.session_state:
+    loaded = _load_json(BOX_FILE, [])
+    st.session_state.box_presets = pd.DataFrame(loaded) if loaded else pd.DataFrame(
+        columns=["使用","名稱","長","寬","高","數量","空箱重量","刪除"]
+    )
+    for col in ["使用","刪除"]:
+        if col not in st.session_state.box_presets.columns:
+            st.session_state.box_presets[col] = False
+
+if "product_templates" not in st.session_state:
+    st.session_state.product_templates = _load_json(TPL_FILE, {})
+
+if "df" not in st.session_state:
+    st.session_state.df = pd.DataFrame(
+        [
+            {"啟用": True, "商品名稱": "禮盒(米餅)", "長": 21.0, "寬": 14.0, "高": 8.5, "重量(kg)": 0.5, "數量": 5, "刪除": False},
+            {"啟用": True, "商品名稱": "紙袋",     "長": 28.0, "寬": 24.3, "高": 0.3, "重量(kg)": 0.05,"數量": 5, "刪除": False},
+        ]
     )
 
-def build_3d_figure(packer, used_bins_only=True):
-    fig = go.Figure()
-    x_offset = 0.0
-    gap = 6.0
+def save_boxes_now():
+    df = st.session_state.box_presets.copy()
+    if "刪除" in df.columns:
+        df = df.drop(columns=["刪除"])
+    _save_json(BOX_FILE, df.to_dict(orient="records"))
 
-    for b in packer.bins:
-        if used_bins_only and len(b.items) == 0:
-            continue
+def save_templates_now():
+    _save_json(TPL_FILE, st.session_state.product_templates)
 
-        # 外箱外框（用透明盒子表示空間）
-        fig.add_trace(cuboid_mesh(
-            x_offset, 0, 0,
-            b.width, b.depth, b.height,
-            color="rgba(0,0,0,0.08)",
-            opacity=0.10,
-            name=f"外箱({b.name})"
-        ))
+# ==========================
+# Layout mode
+# ==========================
+layout_mode = st.radio("版面配置", ["左右 50% / 50%", "上下（垂直）"], horizontal=True, index=0)
 
-        # 箱內商品
-        # py3dbp 的 position = (x,y,z) 對應 width/depth/height
-        for it in b.items:
-            # it.position -> (x,y,z)
-            px, py, pz = it.position
-            dx, dy, dz = it.get_dimension()
-            fig.add_trace(cuboid_mesh(
-                x_offset + px, py, pz,
-                dx, dy, dz,
-                color="rgba(34,197,94,0.85)",  # 綠
-                opacity=0.85,
-                name=it.name
+# ==========================
+# Sections
+# ==========================
+def render_box_section():
+    st.markdown('<div class="section-header">1. 訂單與外箱設定</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+
+    order_name = st.text_input("訂單名稱", value=st.session_state.get("_order_name", "訂單_20241208"), key="order_name")
+    st.session_state["_order_name"] = order_name
+
+    st.caption("外箱尺寸 (cm) - 手動 Key in（可選擇是否參與裝箱）")
+    c1, c2, c3 = st.columns(3)
+    manual_L = c1.number_input("長", value=float(st.session_state.get("manual_L", 35.0)), step=1.0, key="manual_L")
+    manual_W = c2.number_input("寬", value=float(st.session_state.get("manual_W", 25.0)), step=1.0, key="manual_W")
+    manual_H = c3.number_input("高", value=float(st.session_state.get("manual_H", 20.0)), step=1.0, key="manual_H")
+    manual_box_weight = st.number_input("空箱重量 (kg)", value=float(st.session_state.get("manual_box_weight", 0.5)), step=0.1, key="manual_box_weight")
+
+    c4, c5, c6 = st.columns([1, 1, 2])
+    manual_use = c4.checkbox("使用手動箱", value=bool(st.session_state.get("manual_use", True)), key="manual_use")
+    manual_qty = c5.number_input("手動箱數量", value=int(st.session_state.get("manual_qty", 1)), step=1, min_value=0, key="manual_qty")
+    manual_name = c6.text_input("手動箱命名", value=st.session_state.get("manual_name", "手動箱"), key="manual_name")
+
+    st.session_state["_manual_box"] = {
+        "使用": manual_use,
+        "名稱": manual_name,
+        "長": float(manual_L),
+        "寬": float(manual_W),
+        "高": float(manual_H),
+        "空箱重量": float(manual_box_weight),
+        "數量": int(manual_qty),
+    }
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 箱型管理
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div style="font-weight:900;margin-bottom:8px;">📦 箱型管理（新增 / 修改 / 刪除 / 勾選使用）</div>', unsafe_allow_html=True)
+
+    left, right = st.columns([1, 2], gap="large")
+
+    with left:
+        st.caption("新增一筆箱型（新增後可在右側表格直接修改）")
+
+        # ✅ 用 form 避免「要按兩次」與輸入被重置
+        with st.form("form_add_box", clear_on_submit=False):
+            new_box_name = st.text_input("新箱型名稱", value=st.session_state.get("new_box_name", ""), placeholder="例如：A款", key="new_box_name")
+            nb1, nb2, nb3 = st.columns(3)
+            new_L = nb1.number_input("新箱_長", value=float(st.session_state.get("new_L", 45.0)), step=1.0, min_value=0.0, key="new_L")
+            new_W = nb2.number_input("新箱_寬", value=float(st.session_state.get("new_W", 30.0)), step=1.0, min_value=0.0, key="new_W")
+            new_H = nb3.number_input("新箱_高", value=float(st.session_state.get("new_H", 30.0)), step=1.0, min_value=0.0, key="new_H")
+            new_box_weight = st.number_input("新箱_空箱重量(kg)", value=float(st.session_state.get("new_box_weight", 0.5)), step=0.1, min_value=0.0, key="new_box_weight")
+            new_qty = st.number_input("新箱_數量", value=int(st.session_state.get("new_qty", 1)), step=1, min_value=0, key="new_qty")
+
+            st.markdown('<div class="btn-add"></div>', unsafe_allow_html=True)
+            submitted_add = st.form_submit_button("➕ 新增箱型", use_container_width=True)
+
+        if submitted_add:
+            with st.spinner("新增中..."):
+                nm = new_box_name.strip() if new_box_name.strip() else f"箱型_{len(st.session_state.box_presets)+1}"
+                row = {
+                    "使用": True,
+                    "名稱": nm,
+                    "長": float(new_L),
+                    "寬": float(new_W),
+                    "高": float(new_H),
+                    "數量": int(new_qty),
+                    "空箱重量": float(new_box_weight),
+                    "刪除": False
+                }
+                st.session_state.box_presets = pd.concat([st.session_state.box_presets, pd.DataFrame([row])], ignore_index=True)
+                save_boxes_now()
+            st.toast("✅ 已新增箱型並保存", icon="✅")
+
+        # ✅ 刪除也用 form：單次觸發 + 有回饋
+        with st.form("form_del_box"):
+            st.markdown('<div class="btn-del"></div>', unsafe_allow_html=True)
+            submitted_del = st.form_submit_button("🗑️ 刪除勾選的箱型", use_container_width=True)
+
+        if submitted_del:
+            with st.spinner("刪除中..."):
+                dfp = st.session_state.box_presets.copy()
+                if "刪除" not in dfp.columns:
+                    dfp["刪除"] = False
+                before = len(dfp)
+                st.session_state.box_presets = dfp[dfp["刪除"] != True].reset_index(drop=True)
+                save_boxes_now()
+                removed = before - len(st.session_state.box_presets)
+            st.toast(f"✅ 已刪除 {removed} 筆箱型", icon="🗑️")
+
+    with right:
+        st.caption("✅ 勾選「使用」= 參與裝箱；「數量」可輸入 0；「刪除」勾選後按左側刪除按鈕")
+        box_df = st.data_editor(
+            st.session_state.box_presets,
+            num_rows="dynamic",
+            use_container_width=True,
+            height=280,
+            column_config={
+                "使用": st.column_config.CheckboxColumn(),
+                "刪除": st.column_config.CheckboxColumn(help="勾選後按左側『刪除勾選』"),
+                "數量": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+                "長": st.column_config.NumberColumn(min_value=0.0, format="%.1f"),
+                "寬": st.column_config.NumberColumn(min_value=0.0, format="%.1f"),
+                "高": st.column_config.NumberColumn(min_value=0.0, format="%.1f"),
+                "空箱重量": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
+            },
+            key="box_editor",
+        )
+        if "刪除" not in box_df.columns:
+            box_df["刪除"] = False
+        st.session_state.box_presets = box_df
+        save_boxes_now()
+
+    st.info(
+        "外箱操作：\n"
+        "• 手動箱：勾選「使用手動箱」並填數量。\n"
+        "• 預存箱：右側表格可直接改尺寸/數量，勾選「使用」後會被拿去裝箱。\n"
+        "• 刪除：勾選「刪除」→ 按「刪除勾選的箱型」。\n"
+        "• 重新整理也不會消失（已存到本機 JSON）。"
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def render_product_section():
+    st.markdown('<div class="section-header">2. 商品清單（直接編輯表格）</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+
+    st.markdown('<div style="font-weight:900;margin-bottom:8px;">🧩 商品模板（載入 / 儲存 / 刪除）</div>', unsafe_allow_html=True)
+
+    tpl_names = ["(無)"] + sorted(list(st.session_state.product_templates.keys()))
+
+    # ✅ 用 form 避免「要按兩次」＆輸入被重置，並加上「處理中」回饋
+    with st.form("form_template_ops", clear_on_submit=False):
+        r1 = st.columns([2, 1, 2, 1], gap="medium")
+        with r1[0]:
+            tpl_sel = st.selectbox("商品初始值模板", tpl_names, key="tpl_sel")
+        with r1[1]:
+            st.markdown('<div class="btn-load"></div>', unsafe_allow_html=True)
+            btn_load = st.form_submit_button("⬇️ 載入", use_container_width=True)
+        with r1[2]:
+            save_name = st.text_input("另存為模板名稱", value=st.session_state.get("save_name", ""), placeholder="例如：常用商品組合A", key="save_name")
+        with r1[3]:
+            st.markdown('<div class="btn-save"></div>', unsafe_allow_html=True)
+            btn_save = st.form_submit_button("💾 儲存", use_container_width=True)
+
+        r2 = st.columns([2, 1, 2, 1], gap="medium")
+        with r2[0]:
+            del_sel = st.selectbox("要刪除的模板", tpl_names, key="tpl_del_sel")
+        with r2[1]:
+            st.markdown('<div class="btn-del"></div>', unsafe_allow_html=True)
+            btn_del = st.form_submit_button("🗑️ 刪除模板", use_container_width=True)
+        with r2[2]:
+            st.caption("提示：模板/箱型都會永久記錄（存在 data/）")
+        with r2[3]:
+            st.empty()
+
+    if btn_load:
+        with st.spinner("讀入中..."):
+            if tpl_sel != "(無)" and tpl_sel in st.session_state.product_templates:
+                st.session_state.df = pd.DataFrame(st.session_state.product_templates[tpl_sel])
+                if "刪除" not in st.session_state.df.columns:
+                    st.session_state.df["刪除"] = False
+        st.toast("✅ 已載入模板", icon="⬇️")
+
+    if btn_save:
+        nm = (save_name or "").strip()
+        if not nm:
+            st.warning("請先輸入模板名稱再儲存。")
+        else:
+            with st.spinner("儲存中..."):
+                st.session_state.product_templates[nm] = st.session_state.df.to_dict(orient="records")
+                save_templates_now()
+            st.toast("✅ 已儲存模板", icon="💾")
+
+    if btn_del:
+        nm = del_sel
+        if nm == "(無)":
+            st.warning("請選擇要刪除的模板。")
+        else:
+            with st.spinner("刪除中..."):
+                st.session_state.product_templates.pop(nm, None)
+                save_templates_now()
+            st.toast("✅ 已刪除模板", icon="🗑️")
+
+    st.markdown("<hr style='border:none;border-top:1px solid #E5E7EB;margin:12px 0;'>", unsafe_allow_html=True)
+
+    # 刪除商品列：也用 form，避免按兩次
+    cbtn1, cbtn2 = st.columns([1, 3])
+    with cbtn1:
+        with st.form("form_del_products"):
+            st.markdown('<div class="btn-del"></div>', unsafe_allow_html=True)
+            submitted_del_products = st.form_submit_button("🗑️ 刪除勾選商品列", use_container_width=True)
+        if submitted_del_products and len(st.session_state.df) > 0:
+            with st.spinner("刪除中..."):
+                dff = st.session_state.df.copy()
+                if "刪除" not in dff.columns:
+                    dff["刪除"] = False
+                before = len(dff)
+                st.session_state.df = dff[dff["刪除"] != True].reset_index(drop=True)
+                removed = before - len(st.session_state.df)
+            st.toast(f"✅ 已刪除 {removed} 列商品", icon="🗑️")
+
+    with cbtn2:
+        st.caption("✅ 可直接在表格修改；數量可輸入 0（不計算）；啟用取消勾選也不計算")
+
+    edited_df = st.data_editor(
+        st.session_state.df,
+        num_rows="dynamic",
+        use_container_width=True,
+        height=340,
+        column_config={
+            "啟用": st.column_config.CheckboxColumn(),
+            "刪除": st.column_config.CheckboxColumn(help="勾選後按『刪除勾選商品列』"),
+            "數量": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+            "長": st.column_config.NumberColumn(min_value=0.0, format="%.1f"),
+            "寬": st.column_config.NumberColumn(min_value=0.0, format="%.1f"),
+            "高": st.column_config.NumberColumn(min_value=0.0, format="%.1f"),
+            "重量(kg)": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
+        },
+        key="product_editor",
+    )
+    if "刪除" not in edited_df.columns:
+        edited_df["刪除"] = False
+    st.session_state.df = edited_df
+
+    st.info(
+        "商品操作：\n"
+        "• 納入計算：啟用=勾選 且 數量>0。\n"
+        "• 不想計算：把數量改 0 或取消勾選啟用。\n"
+        "• 刪除列：勾選「刪除」→ 按「刪除勾選商品列」。\n"
+        "• 模板會永久保留，可載入/刪除。"
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ==========================
+# Render layout
+# ==========================
+if layout_mode == "左右 50% / 50%":
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        render_box_section()
+    with right:
+        render_product_section()
+else:
+    render_box_section()
+    st.markdown("---")
+    render_product_section()
+
+st.markdown("---")
+
+# ✅ 你要的「開始計算」淡綠色
+st.markdown('<div class="btn-run"></div>', unsafe_allow_html=True)
+run_button = st.button("🚀 開始計算與 3D 模擬", use_container_width=True)
+
+# ==========================
+# Run
+# ==========================
+if run_button:
+    with st.spinner("正在進行智慧裝箱運算..."):
+        order_name = st.session_state.get("_order_name", "訂單")
+        manual_box = st.session_state.get("_manual_box", {
+            "使用": True, "名稱": "手動箱", "長": 35.0, "寬": 25.0, "高": 20.0, "空箱重量": 0.5, "數量": 1
+        })
+
+        candidate_bins = build_candidate_bins(manual_box, st.session_state.box_presets)
+        if not candidate_bins:
+            st.error("請至少勾選 1 種外箱並設定數量 > 0（手動箱或預存箱都可以）。")
+            st.stop()
+
+        max_bin = max(candidate_bins, key=lambda b: b["長"] * b["寬"] * b["高"])
+        items, requested_counts, unique_products, total_qty = build_items_from_df(st.session_state.df, max_bin)
+
+        if total_qty == 0:
+            st.warning("目前沒有任何商品被納入計算（請確認：啟用=勾選 且 數量>0）。")
+            st.stop()
+
+        one_bin_solution = best_single_bin_if_possible(items, candidate_bins)
+
+        if one_bin_solution is not None:
+            bins_result = one_bin_solution["bins"]
+            bin_defs_used = one_bin_solution["bin_defs"]
+            remaining = []
+        else:
+            bins_result, bin_defs_used, remaining = pack_with_inventory(items, candidate_bins)
+
+        packed_counts = {}
+        total_vol = 0.0
+        total_net_weight = 0.0
+        for placed in bins_result:
+            for it in placed:
+                packed_counts[it["name"]] = packed_counts.get(it["name"], 0) + 1
+                total_vol += it["dx"] * it["dy"] * it["dz"]
+                total_net_weight += it["weight"]
+
+        used_box_total_vol = sum(b["長"] * b["寬"] * b["高"] for b in bin_defs_used)
+        used_box_total_weight = sum(_to_float(b.get("空箱重量", 0.0)) for b in bin_defs_used)
+
+        utilization = (total_vol / used_box_total_vol * 100) if used_box_total_vol > 0 else 0.0
+        gross_weight = total_net_weight + used_box_total_weight
+
+        all_fitted = True
+        missing_items_html = ""
+        for name, req_qty in requested_counts.items():
+            real_qty = packed_counts.get(name, 0)
+            if real_qty < req_qty:
+                all_fitted = False
+                diff = req_qty - real_qty
+                missing_items_html += f"<li style='color:#991B1B;background:#FEE2E2;padding:8px;margin:6px 0;border-radius:10px;font-weight:900;'>⚠️ {name}: 遺漏 {diff} 個</li>"
+
+        status_html = (
+            "<div style='color:#065F46;background:#D1FAE5;padding:14px;border-radius:12px;text-align:center;border:1px solid #10B981;font-weight:900;font-size:1.1rem;'>✅ 完美！所有商品皆已裝入。</div>"
+            if all_fitted
+            else f"<div style='color:#991B1B;background:#FEE2E2;padding:14px;border-radius:12px;border:1px solid #EF4444;font-weight:900;'>❌ 注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不足）</div><ul style='padding-left:18px;margin-top:10px;'>{missing_items_html}</ul>"
+        )
+
+        tw_time = _now_tw()
+        now_str = tw_time.strftime("%Y-%m-%d %H:%M")
+        file_time_str = tw_time.strftime("%Y%m%d_%H%M")
+
+        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+
+        box_summary = {}
+        for bdef in bin_defs_used:
+            key = f'{bdef["名稱"]} ({bdef["長"]}×{bdef["寬"]}×{bdef["高"]})'
+            box_summary[key] = box_summary.get(key, 0) + 1
+        box_summary_html = "<br>".join([f"{k} × {v} 箱" for k, v in box_summary.items()]) if box_summary else "-"
+
+        st.markdown(f"""
+        <div class="panel">
+          <div style="font-weight:900;font-size:1.25rem;border-bottom:3px solid #111827;padding-bottom:10px;margin-bottom:12px;">📋 訂單裝箱報告</div>
+          <div style="display:grid;grid-template-columns:170px 1fr;row-gap:10px;column-gap:10px;font-size:1.05rem;">
+            <div style="font-weight:900;color:#374151;">📝 訂單名稱</div><div style="font-weight:900;color:#1d4ed8;">{order_name}</div>
+            <div style="font-weight:900;color:#374151;">🕒 計算時間</div><div>{now_str} (台灣時間)</div>
+            <div style="font-weight:900;color:#374151;">📦 使用外箱</div><div>{box_summary_html}</div>
+            <div style="font-weight:900;color:#374151;">⚖️ 內容淨重</div><div>{total_net_weight:.2f} kg</div>
+            <div style="font-weight:900;color:#b91c1c;">🚛 本次總重</div><div style="font-weight:900;color:#b91c1c;font-size:1.15rem;">{gross_weight:.2f} kg</div>
+            <div style="font-weight:900;color:#374151;">📊 空間利用率</div><div>{utilization:.2f}%</div>
+          </div>
+          <div style="margin-top:14px;">{status_html}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ✅ Plotly 強制白底（含下載報告）
+        fig = go.Figure()
+        axis_config = dict(
+            backgroundcolor="white", showbackground=True,
+            zerolinecolor="#000000", gridcolor="#999999",
+            linecolor="#000000", showgrid=True, showline=True,
+            tickfont=dict(color="black", size=12, family="Arial Black"),
+            title=dict(font=dict(color="black", size=14, family="Arial Black"))
+        )
+        fig.update_layout(
+            template=None,
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            font=dict(color="black"),
+            autosize=True,
+            scene=dict(
+                bgcolor="white",
+                xaxis={**axis_config, 'title': '長 (L)'},
+                yaxis={**axis_config, 'title': '寬 (W)'},
+                zaxis={**axis_config, 'title': '高 (H)'},
+                aspectmode='data',
+                camera=dict(eye=dict(x=1.6, y=1.6, z=1.6))
+            ),
+            margin=dict(t=30, b=0, l=0, r=0),
+            height=640,
+            legend=dict(
+                x=0, y=1, xanchor="left", yanchor="top",
+                font=dict(color="black", size=13),
+                bgcolor="rgba(255,255,255,0.90)",
+                bordercolor="#000000", borderwidth=1
+            )
+        )
+
+        palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB']
+        product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
+
+        def draw_box(offset_x, L, W, H, label):
+            fig.add_trace(go.Scatter3d(
+                x=[offset_x+0, offset_x+L, offset_x+L, offset_x+0, offset_x+0, offset_x+0, offset_x+L, offset_x+L, offset_x+0, offset_x+0, offset_x+0, offset_x+0, offset_x+L, offset_x+L, offset_x+L, offset_x+L],
+                y=[0, 0, W, W, 0, 0, 0, W, W, 0, 0, W, W, 0, 0, W],
+                z=[0, 0, 0, 0, 0, H, H, H, H, H, 0, H, H, H, 0, 0],
+                mode='lines', line=dict(color='#000000', width=6),
+                name=label
             ))
 
-        x_offset += b.width + gap
+        offsets = []
+        cur_x = 0.0
+        gap = 8.0
+        for bdef in bin_defs_used:
+            offsets.append(cur_x)
+            cur_x += float(bdef["長"]) + gap
 
-    fig.update_layout(
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        margin=dict(l=10, r=10, t=30, b=10),
-        scene=dict(
-            bgcolor="white",
-            xaxis=dict(backgroundcolor="white", gridcolor="rgba(0,0,0,0.1)", zerolinecolor="rgba(0,0,0,0.2)"),
-            yaxis=dict(backgroundcolor="white", gridcolor="rgba(0,0,0,0.1)", zerolinecolor="rgba(0,0,0,0.2)"),
-            zaxis=dict(backgroundcolor="white", gridcolor="rgba(0,0,0,0.1)", zerolinecolor="rgba(0,0,0,0.2)"),
-        ),
-        legend=dict(bgcolor="rgba(255,255,255,0.95)")
-    )
-    return fig
+        for bi, placed in enumerate(bins_result):
+            bdef = bin_defs_used[bi]
+            ox = offsets[bi]
+            label = "外箱" if bi == 0 else f"外箱_{bi+1}"
+            label = f'{label} ({bdef["名稱"]})'
+            draw_box(ox, bdef["長"], bdef["寬"], bdef["高"], label)
 
+            for it in placed:
+                name = it["name"]
+                color = product_colors.get(name, "#888")
+                x, y, z = it["x"], it["y"], it["z"]
+                dx, dy, dz = it["dx"], it["dy"], it["dz"]
 
-# =========================
-# Section 3：裝箱結果與模擬
-# =========================
-st.markdown('<div class="section-title">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+                fig.add_trace(go.Mesh3d(
+                    x=[ox+x, ox+x+dx, ox+x+dx, ox+x, ox+x, ox+x+dx, ox+x+dx, ox+x],
+                    y=[y, y, y+dy, y+dy, y, y, y+dy, y+dy],
+                    z=[z, z, z, z, z+dz, z+dz, z+dz, z+dz],
+                    i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                    j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                    k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                    color=color, opacity=1, name=name, showlegend=True,
+                ))
 
-st.markdown('<div class="btn-run">', unsafe_allow_html=True)
-run_btn = st.button("🚀 開始計算與 3D 模擬", key="run_pack_btn")
-st.markdown("</div>", unsafe_allow_html=True)
+                fig.add_trace(go.Scatter3d(
+                    x=[ox+x, ox+x+dx, ox+x+dx, ox+x, ox+x, ox+x, ox+x+dx, ox+x+dx, ox+x, ox+x, ox+x, ox+x, ox+x+dx, ox+x+dx, ox+x+dx, ox+x+dx],
+                    y=[y, y, y+dy, y+dy, y, y, y, y, y+dy, y+dy, y, y+dy, y+dy, y, y, y+dy],
+                    z=[z, z, z, z, z, z+dz, z+dz, z+dz, z+dz, z+dz, z, z+dz, z+dz, z+dz, z, z],
+                    mode='lines', line=dict(color='#000000', width=2),
+                    showlegend=False
+                ))
 
-if run_btn:
-    with st.spinner("計算中..."):
-        # 取出箱與商品
-        all_bins = expand_bins(
-            manual_on=use_manual_box,
-            manual_name=manual_name.strip() or "手動箱",
-            L=manual_l, W=manual_w, H=manual_h,
-            empty_w=manual_empty_weight,
-            manual_qty=int(manual_qty),
-            saved_boxes_rows=st.session_state.boxes
-        )
-        items = expand_items(st.session_state.products)
+        names = set()
+        fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
-        if len(items) == 0:
-            st.session_state.last_result = {"error": "目前沒有任何商品參與裝箱（請確認啟用 + 數量 > 0）"}
-        elif len(all_bins) == 0:
-            st.session_state.last_result = {"error": "目前沒有任何外箱參與裝箱（請確認手動箱或箱型管理有啟用且數量 > 0）"}
-        else:
-            chosen_bins, packer, fitted = choose_best_bins(all_bins, items)
-            st.session_state.last_result = {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "total_items": len(items),
-                "fitted": fitted,
-                "chosen_bins": chosen_bins,
-                "packer": packer,
-            }
+        full_html_content = f"""
+        <html><head><meta charset="utf-8"><title>裝箱報告 - {order_name}</title></head>
+        <body style="font-family:Arial;background:#f3f4f6;padding:24px;color:#111;">
+          <div style="max-width:1100px;margin:0 auto;background:#fff;padding:24px;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.08);">
+            <h2 style="margin-top:0;">📋 訂單裝箱報告</h2>
+            <p><b>訂單名稱：</b>{order_name}</p>
+            <p><b>計算時間：</b>{now_str} (台灣時間)</p>
+            <p><b>使用外箱：</b><br>{box_summary_html}</p>
+            <p><b>內容淨重：</b>{total_net_weight:.2f} kg</p>
+            <p><b>本次總重：</b>{gross_weight:.2f} kg</p>
+            <p><b>空間利用率：</b>{utilization:.2f}%</p>
+            <hr>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;">
+              {fig.to_html(include_plotlyjs='cdn', full_html=False)}
+            </div>
+          </div>
+        </body></html>
+        """
+        file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
 
-# 顯示結果
-res = st.session_state.last_result
-if res:
-    if "error" in res:
-        st.error(res["error"])
-    else:
-        packer = res["packer"]
-        total_items = res["total_items"]
-        fitted = res["fitted"]
-
-        # 統計：使用到的箱（有放商品）
-        used_bins = [b for b in packer.bins if len(b.items) > 0]
-        unused_bins = [b for b in packer.bins if len(b.items) == 0]
-
-        content_weight = 0.0
-        for b in used_bins:
-            for it in b.items:
-                content_weight += float(it.weight)
-
-        box_weight = 0.0
-        for b in used_bins:
-            # b.max_weight 在 py3dbp 這裡用作箱重
-            box_weight += float(b.max_weight)
-
-        total_weight = content_weight + box_weight
-
-        # 空間利用率（使用到的箱合計）
-        used_box_volume = sum(b.width * b.depth * b.height for b in used_bins) if used_bins else 0.0
-        items_volume = 0.0
-        for b in used_bins:
-            for it in b.items:
-                dx, dy, dz = it.get_dimension()
-                items_volume += dx * dy * dz
-        utilization = (items_volume / used_box_volume * 100.0) if used_box_volume > 0 else 0.0
-
-        st.write("")
-        st.markdown(f"**🧾 訂單名稱：** {st.session_state.order_name}")
-        st.markdown(f"**🕒 計算時間：** {res['time']}（台灣時間）")
-        st.markdown(f"**📦 使用箱數：** {len(used_bins)}（未使用箱：{len(unused_bins)}）")
-        st.markdown(f"**⚖️ 內容淨重：** {content_weight:.2f} kg")
-        st.markdown(f"**📦 空箱重量：** {box_weight:.2f} kg")
-        st.markdown(f"**🚚 本箱總重：** {total_weight:.2f} kg")
-        st.markdown(f"**📊 空間利用率：** {utilization:.2f}%")
-
-        if fitted < total_items:
-            st.error(f"❌ 注意：有部分商品裝不下！（遺漏 {total_items - fitted} 件）")
-        else:
-            st.success("✅ 完美！所有商品皆已裝入。")
-
-        # 3D 顯示（白底）
-        fig = build_3d_figure(packer, used_bins_only=True)
-        st.plotly_chart(fig, use_container_width=True)
-
-        # 下載報告（白底 HTML）
-        report_html = f"""
-<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8">
-<title>裝箱報告</title>
-<style>
-  body{{font-family: Arial, \"Noto Sans TC\", sans-serif; background:#fff; color:#111; padding:24px;}}
-  .card{{border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin:12px 0;}}
-  h2{{margin:0 0 10px 0;}}
-  table{{border-collapse:collapse; width:100%;}}
-  th,td{{border:1px solid #e5e7eb; padding:8px; font-size:14px;}}
-  th{{background:#f9fafb;}}
-  .ok{{background:#dcfce7; border:1px solid #86efac; padding:10px; border-radius:10px;}}
-  .bad{{background:#fee2e2; border:1px solid #fecaca; padding:10px; border-radius:10px;}}
-</style>
-</head>
-<body>
-  <h2>訂單裝箱報告</h2>
-  <div class="card">
-    <div><b>訂單名稱：</b> {st.session_state.order_name}</div>
-    <div><b>計算時間：</b> {res['time']}（台灣時間）</div>
-    <div><b>使用箱數：</b> {len(used_bins)}</div>
-    <div><b>內容淨重：</b> {content_weight:.2f} kg</div>
-    <div><b>空箱重量：</b> {box_weight:.2f} kg</div>
-    <div><b>本箱總重：</b> {total_weight:.2f} kg</div>
-    <div><b>空間利用率：</b> {utilization:.2f}%</div>
-  </div>
-
-  {"<div class='ok'>✅ 所有商品皆已裝入。</div>" if fitted==total_items else f"<div class='bad'>❌ 有商品裝不下（遺漏 {total_items-fitted} 件）。</div>"}
-
-  <div class="card">
-    <h3>箱內明細</h3>
-    <table>
-      <tr><th>箱名</th><th>箱尺寸</th><th>箱內商品</th></tr>
-"""
-        for b in used_bins:
-            items_list = ", ".join([it.name for it in b.items]) if b.items else "-"
-            report_html += f"<tr><td>{b.name}</td><td>{b.width}×{b.depth}×{b.height}</td><td>{items_list}</td></tr>"
-
-        report_html += """
-    </table>
-  </div>
-</body>
-</html>
-"""
+        st.markdown('<div class="btn-load"></div>', unsafe_allow_html=True)
         st.download_button(
-            "⬇️ 下載完整裝箱報告（.html）",
-            data=report_html.encode("utf-8"),
-            file_name=f"{st.session_state.order_name}_裝箱報告.html",
+            label="📥 下載完整裝箱報告 (.html)",
+            data=full_html_content,
+            file_name=file_name,
             mime="text/html",
+            use_container_width=True
         )
+
+        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
