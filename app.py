@@ -8,6 +8,10 @@ from itertools import permutations
 import plotly.graph_objects as go
 import time
 
+import streamlit as st
+st.write("Streamlit version:", st.__version__)
+
+
 # ==========================
 # 檔案持久化（本機 JSON）
 # ==========================
