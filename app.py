@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
-from py3dbp import Packer, Bin, Item
+from py3dbp import Packer, Bin, Item  # 保留原 import（但本版演算法不依賴 py3dbp）
 import plotly.graph_objects as go
 import datetime
+import copy
 import math
 from itertools import permutations
 
@@ -47,162 +48,215 @@ def _to_int(x, default=0):
         return int(default)
 
 # ==========================
-# 彎折欄位（只新增這欄）
+# 彎折選項
 # ==========================
 FOLD_NONE = "否"
 FOLD_90 = "90度彎"
 FOLD_HALF = "可對折"
 
-def fold_candidates(l, w, h, fold_type):
-    """回傳可能的「折完後等效長方體」候選尺寸（不會變成超大盒）"""
+def _thickness(l, w, h):
+    vals = [v for v in [l, w, h] if v and v > 0]
+    return min(vals) if vals else 0.0
+
+def fold_orientations(name, l, w, h, fold_type, box_l, box_w, box_h):
+    """
+    回傳允許的 orientations（dx,dy,dz），並且：
+    - 90度彎：強制「直立」（dz 取大邊），不允許攤平
+    - 可對折：提供「薄片平放」+「薄片立放靠牆」兩種，讓系統選更省空間的
+    - 否：6 旋轉
+    """
     l = max(_to_float(l), 0.0)
     w = max(_to_float(w), 0.0)
     h = max(_to_float(h), 0.0)
+    if l <= 0 or w <= 0 or h <= 0:
+        return []
 
-    if fold_type == FOLD_NONE:
-        return [(l, w, h)]
+    t = _thickness(l, w, h)
+    a = max(l, w)
+    b = min(l, w)
 
-    t = min([d for d in (l, w, h) if d > 0] or [0.0])  # 厚度（薄片用）
-    if t <= 0:
-        return [(l, w, h)]
-
-    if fold_type == FOLD_HALF:
-        # 沿長對折 / 沿寬對折
-        return [
-            (l / 2.0, w, t * 2.0),
-            (l, w / 2.0, t * 2.0),
-        ]
+    oris = []
 
     if fold_type == FOLD_90:
-        # 90 度彎：等效為「薄邊貼牆」的 L 型包圍盒近似：把厚度當成其中一邊
-        # (max(l,w), t, min(l,w)) 與 (min(l,w), t, max(l,w)) 兩種
-        a = max(l, w)
-        b = min(l, w)
-        return [
-            (a, t, b),
+        # 90度彎：視為「薄邊貼牆」的直立板
+        # 高度 dz = a（大邊）
+        # 底面為 (t, b) 或 (b, t)
+        candidates = [
+            (t, b, a),
             (b, t, a),
         ]
+        # 強制直立：不允許 dz = t 之類的攤平
+        for dx, dy, dz in candidates:
+            if dx <= box_l and dy <= box_w and dz <= box_h:
+                oris.append((dx, dy, dz))
+        return oris
 
-    return [(l, w, h)]
+    if fold_type == FOLD_HALF:
+        # 對折：厚度變 2t，長或寬變一半
+        # 先給「平放薄片」：dz 小
+        flat_candidates = [
+            (l / 2.0, w, 2.0 * t),
+            (l, w / 2.0, 2.0 * t),
+        ]
+        # 再給「立放靠牆」：讓薄片像文件夾一樣立起來貼牆（底面小）
+        # 立放：dz 取較大平面邊，底面取(2t, 另一邊)
+        stand_candidates = []
+        for fx, fy, fz in flat_candidates:
+            # 以折完後的平面 (fx,fy) 來做立放
+            big = max(fx, fy)
+            small = min(fx, fy)
+            stand_candidates += [
+                (2.0 * t, small, big),
+                (small, 2.0 * t, big),
+            ]
 
-# ==========================
-# 方向挑選：以「箱內可容納件數最大」為優先（你要的直放/橫放省空間）
-# ==========================
-def best_orientation_by_capacity(dims, box_l, box_w, box_h, prefer_mode=None):
-    """
-    dims: (l,w,h)
-    prefer_mode: None / 0 / 1 / 2
-      - None：純容量最大
-      - 0：偏平放
-      - 1：偏側放
-      - 2：偏直立
-    """
-    l, w, h = dims
-    candidates = list(set(permutations([l, w, h], 3)))
+        candidates = flat_candidates + stand_candidates
+        for dx, dy, dz in candidates:
+            if dx <= box_l and dy <= box_w and dz <= box_h:
+                oris.append((dx, dy, dz))
+        # 去重
+        oris = list({(round(x,6), round(y,6), round(z,6)) for x,y,z in oris})
+        return [(x,y,z) for x,y,z in oris]
 
-    def capacity_key(dl, dw, dh):
-        if dl <= 0 or dw <= 0 or dh <= 0:
-            return (-1, 0, 0, 0)
-        if dl > box_l or dw > box_w or dh > box_h:
-            return (-1, 0, 0, 0)
-
-        nx = int(box_l // dl)
-        ny = int(box_w // dw)
-        nz = int(box_h // dh)
-        count = nx * ny * nz
-
-        # tie-break：高度低、底面小（更好拼版）
-        base = dl * dw
-        key = (count, -dh, -base)
-
-        # 模式偏好：只當作微弱加權（不會犧牲容量最大）
-        if prefer_mode is not None:
-            # 模式0：偏平放（dh 越接近原 h 越好）
-            if prefer_mode == 0:
-                key = (count, -abs(dh - h), -dh, -base)
-            # 模式1：偏側放（dw 越接近原 h 越好）
-            elif prefer_mode == 1:
-                key = (count, -abs(dw - h), -dh, -base)
-            # 模式2：偏直立（dl 越接近原 h 越好）
-            elif prefer_mode == 2:
-                key = (count, -abs(dl - h), -dh, -base)
-
-        return key
-
-    best = None
-    best_k = None
-    for dl, dw, dh in candidates:
-        k = capacity_key(dl, dw, dh)
-        if best is None or k > best_k:
-            best = (dl, dw, dh)
-            best_k = k
-
-    return best if best is not None else (l, w, h)
+    # fold none：六種旋轉
+    for dx, dy, dz in set(permutations([l, w, h], 3)):
+        if dx <= box_l and dy <= box_w and dz <= box_h:
+            oris.append((dx, dy, dz))
+    return oris
 
 # ==========================
-# 視覺貼牆壓縮（只影響 3D 顯示，不改 packer 判斷）
+# 碰撞檢查
 # ==========================
-def compact_positions(items, box_l, box_w, box_h):
-    """
-    items: list of dict {name, x,y,z, dx,dy,dz, weight}
-    回傳新 items（盡量往 (0,0,0) 方向貼牆、貼已放物）
-    """
-    def collide(a, b):
-        return not (
-            a["x"] + a["dx"] <= b["x"] or
-            b["x"] + b["dx"] <= a["x"] or
-            a["y"] + a["dy"] <= b["y"] or
-            b["y"] + b["dy"] <= a["y"] or
-            a["z"] + a["dz"] <= b["z"] or
-            b["z"] + b["dz"] <= a["z"]
-        )
+def _collide(a, b):
+    return not (
+        a["x"] + a["dx"] <= b["x"] or
+        b["x"] + b["dx"] <= a["x"] or
+        a["y"] + a["dy"] <= b["y"] or
+        b["y"] + b["dy"] <= a["y"] or
+        a["z"] + a["dz"] <= b["z"] or
+        b["z"] + b["dz"] <= a["z"]
+    )
 
+def _inside_box(x, y, z, dx, dy, dz, box_l, box_w, box_h):
+    return (x >= 0 and y >= 0 and z >= 0 and
+            x + dx <= box_l and y + dy <= box_w and z + dz <= box_h)
+
+def _point_is_covered(px, py, pz, placed):
+    # 點若落在已放置的盒子內，視為無效點
+    for b in placed:
+        if (b["x"] <= px < b["x"] + b["dx"] and
+            b["y"] <= py < b["y"] + b["dy"] and
+            b["z"] <= pz < b["z"] + b["dz"]):
+            return True
+    return False
+
+# ==========================
+# 人類式靠牆裝箱：Extreme-Points / Corner-first
+# - 一律從 (0,0,0) 角落開始塞
+# - 先找最低 z，再找最低 y，再找最低 x（像人類靠牆排）
+# - 90度彎：只允許直立 orientations（上面已限制）
+# - 對折：提供立放/平放，並用評分挑最省空間
+# ==========================
+def pack_one_bin(items, box_l, box_w, box_h):
     placed = []
-    # 先按 z,y,x 排序（更像人類從底到上、從角落開始）
-    items_sorted = sorted(items, key=lambda t: (t["z"], t["y"], t["x"]))
+    points = {(0.0, 0.0, 0.0)}
 
-    for it in items_sorted:
-        cur = dict(it)
+    def score_candidate(x, y, z, dx, dy, dz):
+        # 目標：越靠牆越好（x,y,z 小），同時底面積越小越好（不擋路），高度也不要亂爆
+        base = dx * dy
+        return (z, y, x, base, dz)
 
-        # 往 X 貼牆
-        target_x = 0.0
-        while True:
-            moved = dict(cur)
-            moved["x"] = target_x
-            if moved["x"] < 0 or moved["x"] + moved["dx"] > box_l:
-                break
-            if any(collide(moved, p) for p in placed):
-                break
-            cur = moved
-            break
+    for it in items:
+        best = None
+        best_s = None
 
-        # 往 Y 貼牆
-        target_y = 0.0
-        while True:
-            moved = dict(cur)
-            moved["y"] = target_y
-            if moved["y"] < 0 or moved["y"] + moved["dy"] > box_w:
-                break
-            if any(collide(moved, p) for p in placed):
-                break
-            cur = moved
-            break
+        # points 由「更像人類」順序排序：z→y→x
+        pts = sorted(points, key=lambda p: (p[2], p[1], p[0]))
 
-        # 往 Z 貼底
-        target_z = 0.0
-        while True:
-            moved = dict(cur)
-            moved["z"] = target_z
-            if moved["z"] < 0 or moved["z"] + moved["dz"] > box_h:
-                break
-            if any(collide(moved, p) for p in placed):
-                break
-            cur = moved
-            break
+        for (px, py, pz) in pts:
+            # 已被覆蓋的點不試
+            if _point_is_covered(px, py, pz, placed):
+                continue
 
-        placed.append(cur)
+            for (dx, dy, dz) in it["oris"]:
+                if not _inside_box(px, py, pz, dx, dy, dz, box_l, box_w, box_h):
+                    continue
+
+                cand_box = {"x": px, "y": py, "z": pz, "dx": dx, "dy": dy, "dz": dz}
+                if any(_collide(cand_box, p) for p in placed):
+                    continue
+
+                s = score_candidate(px, py, pz, dx, dy, dz)
+                if best is None or s < best_s:
+                    best = cand_box
+                    best_s = s
+
+            # 這個點若能放到，通常就是最靠牆的解；可提早 break 但會少一些最佳化
+            # 這裡保守不 break，避免錯過更小底面積的 orientation
+
+        if best is None:
+            # 這個 item 放不進本箱
+            it["placed"] = False
+            continue
+
+        # 放置成功
+        it["placed"] = True
+        it["x"], it["y"], it["z"] = best["x"], best["y"], best["z"]
+        it["dx"], it["dy"], it["dz"] = best["dx"], best["dy"], best["dz"]
+
+        placed.append({
+            "name": it["name"],
+            "x": it["x"], "y": it["y"], "z": it["z"],
+            "dx": it["dx"], "dy": it["dy"], "dz": it["dz"],
+            "weight": it["weight"]
+        })
+
+        # 新極點：沿 x、y、z 推出 3 個點（經典 extreme points）
+        new_pts = [
+            (it["x"] + it["dx"], it["y"], it["z"]),
+            (it["x"], it["y"] + it["dy"], it["z"]),
+            (it["x"], it["y"], it["z"] + it["dz"]),
+        ]
+        for np in new_pts:
+            nx, ny, nz = np
+            if nx <= box_l and ny <= box_w and nz <= box_h:
+                points.add((float(nx), float(ny), float(nz)))
+
+        # 修剪 points：移除落在盒子內的點（減少亂塞中間）
+        points = {p for p in points if not _point_is_covered(p[0], p[1], p[2], placed)}
 
     return placed
+
+def pack_multi_bins(items, box_l, box_w, box_h, max_bins=50):
+    remaining = items[:]
+    bins = []
+    for _ in range(max_bins):
+        if not remaining:
+            break
+
+        # 嘗試在本箱放置
+        placed = pack_one_bin(remaining, box_l, box_w, box_h)
+
+        if not placed:
+            # 一個都放不進就停止（避免無限開箱）
+            break
+
+        bins.append(placed)
+
+        # 更新 remaining（沒被放進去的）
+        still = []
+        placed_count = 0
+        for it in remaining:
+            if it.get("placed"):
+                placed_count += 1
+                # 清除旗標，避免下一箱誤判
+                it.pop("placed", None)
+            else:
+                still.append(it)
+                it.pop("placed", None)
+        remaining = still
+
+    return bins, remaining
 
 # ==========================
 # 頁面設定（保留你原檔）
@@ -210,11 +264,14 @@ def compact_positions(items, box_l, box_w, box_h):
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
 # ==========================
-# CSS：強制介面修復（保留你原檔）
+# CSS：完全保留你原檔（不改顏色/布局）
 # ==========================
 st.markdown("""
 <style>
-    .stApp { background-color: #ffffff !important; color: #000000 !important; }
+    .stApp {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+    }
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="stSidebarCollapsedControl"] { display: none !important; }
     [data-testid="stDecoration"] { display: none !important; }
@@ -316,146 +373,128 @@ with col_right:
     )
 
 st.markdown("---")
+
 b1, b2, b3 = st.columns([1, 2, 1])
 with b2:
     run_button = st.button("🚀 開始計算與 3D 模擬", type="primary", use_container_width=True)
 
 # ==========================
-# 核心：多策略嘗試（學 Gemini 那種「能裝下就先贏」的穩健作法）
-# ==========================
-def build_items(df, prefer_mode=None):
-    """
-    依照每列商品 + 彎折候選，為該商品選擇「箱內可容納件數最大」的方向，
-    然後建立精確 qty 個 Item。
-    """
-    items = []
-    requested_counts = {}
-    unique_products = []
-    total_qty = 0
-
-    # 保留你原本的「底面積大先放」精神（紙袋先），但加上 volume tie-break
-    df2 = df.copy()
-    df2["長"] = df2["長"].apply(_to_float)
-    df2["寬"] = df2["寬"].apply(_to_float)
-    df2["高"] = df2["高"].apply(_to_float)
-    df2["重量(kg)"] = df2["重量(kg)"].apply(_to_float)
-    df2["數量"] = df2["數量"].apply(_to_int)
-    if "彎折" not in df2.columns:
-        df2["彎折"] = FOLD_NONE
-
-    df2["base_area"] = df2["長"] * df2["寬"]
-    df2["volume"] = df2["長"] * df2["寬"] * df2["高"]
-    df2 = df2.sort_values(by=["base_area", "volume"], ascending=[False, False])
-
-    for _, row in df2.iterrows():
-        name = str(row.get("商品名稱", "")).strip()
-        if not name:
-            continue
-
-        l = _to_float(row.get("長", 0))
-        w = _to_float(row.get("寬", 0))
-        h = _to_float(row.get("高", 0))
-        weight = _to_float(row.get("重量(kg)", 0))
-        qty = _to_int(row.get("數量", 0))
-        fold = str(row.get("彎折", FOLD_NONE)).strip() or FOLD_NONE
-
-        if qty <= 0:
-            continue
-
-        total_qty += qty
-        requested_counts[name] = requested_counts.get(name, 0) + qty
-        if name not in unique_products:
-            unique_products.append(name)
-
-        # 扁平物（紙袋）判斷：高度遠小於長寬 -> 讓它更容易被當作薄片處理
-        is_flat_item = (h > 0 and l > 0 and w > 0 and (h < l * 0.2) and (h < w * 0.2))
-
-        # 取得折疊候選
-        cand = fold_candidates(l, w, h, fold)
-
-        # 在候選中挑一個「最佳（容量最大）」的方向（mode 只是偏好，不會犧牲容量）
-        best_dims = None
-        best_key = None
-        for dims in cand:
-            # 扁平物：優先保持薄片姿態（但仍用容量最大挑方向）
-            chosen = best_orientation_by_capacity(dims, box_l, box_w, box_h, prefer_mode if not is_flat_item else 0)
-            dl, dw, dh = chosen
-            nx = int(box_l // dl) if dl > 0 else 0
-            ny = int(box_w // dw) if dw > 0 else 0
-            nz = int(box_h // dh) if dh > 0 else 0
-            count = nx * ny * nz
-            key = (count, -dh, -(dl * dw))
-            if best_dims is None or key > best_key:
-                best_dims = chosen
-                best_key = key
-
-        final_l, final_w, final_h = best_dims if best_dims else (l, w, h)
-
-        for _i in range(qty):
-            items.append(Item(name, final_l, final_w, final_h, weight))
-
-    return items, requested_counts, unique_products, total_qty
-
-def run_pack(items):
-    p = Packer()
-    b = Bin("StandardBox", box_l, box_w, box_h, 999999)
-    p.add_bin(b)
-    for it in items:
-        p.add_item(it)
-
-    # 嘗試 fix_point 讓它更貼角（不同版本 py3dbp 可能不支援，做相容）
-    try:
-        p.pack(bigger_first=False, fix_point=True)
-    except TypeError:
-        p.pack(bigger_first=False)
-
-    fitted = sum(len(bx.items) for bx in p.bins)
-    return p, fitted
-
-# ==========================
-# 下半部：運算與結果（顯示結構完全維持）
+# 下半部：裝箱結果與模擬
 # ==========================
 if run_button:
     with st.spinner('正在進行智慧裝箱運算...'):
 
-        # 先準備 df（避免直接污染編輯表）
-        df_work = edited_df.copy()
-        if "彎折" not in df_work.columns:
-            df_work["彎折"] = FOLD_NONE
+        df = edited_df.copy()
+        if "彎折" not in df.columns:
+            df["彎折"] = FOLD_NONE
 
-        # 多策略：模擬 Gemini 那種「多嘗試，選最好」的穩健路線
-        # - prefer_mode: None(純容量) / 0(偏平放) / 1(偏側放) / 2(偏直立)
-        strategies = [None, 0, 1, 2]
+        # 清洗
+        df["長"] = df["長"].apply(_to_float)
+        df["寬"] = df["寬"].apply(_to_float)
+        df["高"] = df["高"].apply(_to_float)
+        df["重量(kg)"] = df["重量(kg)"].apply(_to_float)
+        df["數量"] = df["數量"].apply(_to_int)
+        df["彎折"] = df["彎折"].fillna(FOLD_NONE).astype(str)
 
-        best_packer = None
-        best_fitted = -1
-        best_items_meta = None
-        best_req = None
-        best_unique = None
-        best_total_qty = 0
+        # 保留你原本的排序精神：底面積大先（紙袋先鋪/靠邊）
+        df["base_area"] = df["長"] * df["寬"]
+        df["volume"] = df["長"] * df["寬"] * df["高"]
+        df = df.sort_values(by=["base_area", "volume"], ascending=[False, False])
 
-        for mode in strategies:
-            items, req_counts, unique_products, total_qty = build_items(df_work, prefer_mode=mode)
-            packer, fitted = run_pack(items)
+        # 建立精準 items（完全依照數量，不幻想）
+        items = []
+        requested_counts = {}
+        unique_products = []
+        total_qty = 0
 
-            if fitted > best_fitted:
-                best_packer = packer
-                best_fitted = fitted
-                best_req = req_counts
-                best_unique = unique_products
-                best_total_qty = total_qty
+        for _, r in df.iterrows():
+            name = str(r.get("商品名稱", "")).strip()
+            if not name:
+                continue
+            l, w, h = r["長"], r["寬"], r["高"]
+            weight = r["重量(kg)"]
+            qty = r["數量"]
+            fold = r["彎折"].strip() if r["彎折"] else FOLD_NONE
 
-            if best_fitted == total_qty:
-                break
+            if qty <= 0:
+                continue
 
-        packer = best_packer
-        requested_counts = best_req or {}
-        unique_products = best_unique or []
-        total_qty = best_total_qty
+            requested_counts[name] = requested_counts.get(name, 0) + qty
+            if name not in unique_products:
+                unique_products.append(name)
 
-        # ==============
-        # 3D 繪圖（保留你原檔外觀，只改善貼牆視覺）
-        # ==============
+            total_qty += qty
+
+            oris = fold_orientations(name, l, w, h, fold, box_l, box_w, box_h)
+            if not oris:
+                # 任何姿態都不可能進箱 -> 直接都當作 unfit
+                for _ in range(qty):
+                    items.append({"name": name, "oris": [], "weight": weight})
+                continue
+
+            for _ in range(qty):
+                items.append({"name": name, "oris": oris, "weight": weight})
+
+        # 多箱逐箱裝（箱1裝不下的才進箱2）
+        bins, remaining = pack_multi_bins(items, box_l, box_w, box_h, max_bins=50)
+
+        # 統計
+        packed_counts = {}
+        total_vol = 0.0
+        total_net_weight = 0.0
+
+        for b in bins:
+            for it in b:
+                packed_counts[it["name"]] = packed_counts.get(it["name"], 0) + 1
+                total_vol += (it["dx"] * it["dy"] * it["dz"])
+                total_net_weight += it["weight"]
+
+        used_box_count = max(1, len(bins)) if bins else 1
+
+        # 空間利用率：以實際用到的箱數計算
+        box_vol = box_l * box_w * box_h
+        utilization = (total_vol / (box_vol * used_box_count)) * 100 if box_vol > 0 else 0.0
+
+        gross_weight = float(total_net_weight) + float(box_weight) * used_box_count
+
+        # 報表狀態
+        all_fitted = True
+        missing_items_html = ""
+        for name, req_qty in requested_counts.items():
+            real_qty = packed_counts.get(name, 0)
+            if real_qty < req_qty:
+                all_fitted = False
+                diff = req_qty - real_qty
+                missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
+
+        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
+
+        # 時間
+        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        now_str = tw_time.strftime("%Y-%m-%d %H:%M")
+        file_time_str = tw_time.strftime("%Y%m%d_%H%M")
+
+        report_html = f"""
+        <div class="report-card">
+            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
+            <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
+                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
+                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
+            </table>
+            {status_html}
+        </div>
+        """
+
+        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
+        st.markdown(report_html, unsafe_allow_html=True)
+
+        # ==========================
+        # 3D 繪圖：支援多箱（箱2會顯示）
+        # ==========================
         fig = go.Figure()
 
         axis_config = dict(
@@ -496,114 +535,62 @@ if run_button:
             )
         )
 
-        fig.add_trace(go.Scatter3d(
-            x=[0, box_l, box_l, 0, 0, 0, box_l, box_l, 0, 0, 0, 0, box_l, box_l, box_l, box_l],
-            y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
-            z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
-            mode='lines', line=dict(color='#000000', width=6), name='外箱'
-        ))
-
-        # 顏色設定
         palette = ['#FF5733', '#33FF57', '#3357FF', '#F1C40F', '#8E44AD', '#00FFFF', '#FF00FF', '#E74C3C', '#2ECC71', '#3498DB', '#E67E22', '#1ABC9C']
         product_colors = {name: palette[i % len(palette)] for i, name in enumerate(unique_products)}
 
-        total_vol = 0.0
-        total_net_weight = 0.0
-        packed_counts = {}
+        # 多箱在 x 方向平移顯示
+        spacing = box_l * 1.25
 
-        # 先取出 packer 的 items，做「視覺貼牆壓縮」
-        raw_items = []
-        for b in packer.bins:
-            for it in b.items:
-                x, y, z = float(it.position[0]), float(it.position[1]), float(it.position[2])
-                dim = it.get_dimension()
-                dx, dy, dz = float(dim[0]), float(dim[1]), float(dim[2])
-                raw_items.append({
-                    "name": it.name,
-                    "x": x, "y": y, "z": z,
-                    "dx": dx, "dy": dy, "dz": dz,
-                    "weight": float(it.weight)
-                })
-
-        compacted = compact_positions(raw_items, box_l, box_w, box_h)
-
-        # 畫出 compacted（更靠牆）
-        for it in compacted:
-            name = it["name"]
-            packed_counts[name] = packed_counts.get(name, 0) + 1
-
-            x, y, z = it["x"], it["y"], it["z"]
-            dx, dy, dz = it["dx"], it["dy"], it["dz"]
-            wgt = it["weight"]
-
-            total_vol += (dx * dy * dz)
-            total_net_weight += wgt
-
-            color = product_colors.get(name, '#888')
-            hover_text = f"{name}<br>實際佔用: {dx}x{dy}x{dz}<br>重量: {wgt:.2f}kg<br>位置:({x},{y},{z})"
-
-            fig.add_trace(go.Mesh3d(
-                x=[x, x+dx, x+dx, x, x, x+dx, x+dx, x],
-                y=[y, y, y+dy, y+dy, y, y, y+dy, y+dy],
-                z=[z, z, z, z, z+dz, z+dz, z+dz, z+dz],
-                i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                color=color, opacity=1, name=name, showlegend=True,
-                text=hover_text, hoverinfo='text',
-                lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5),
-                lightposition=dict(x=1000, y=1000, z=2000)
-            ))
-
+        def draw_box(offset_x, label="外箱"):
             fig.add_trace(go.Scatter3d(
-                x=[x, x+dx, x+dx, x, x, x, x+dx, x+dx, x, x, x, x, x+dx, x+dx, x+dx, x+dx],
-                y=[y, y, y+dy, y+dy, y, y, y, y, y+dy, y+dy, y, y+dy, y+dy, y, y, y+dy],
-                z=[z, z, z, z, z, z+dz, z+dz, z+dz, z+dz, z+dz, z, z+dz, z+dz, z+dz, z, z],
-                mode='lines', line=dict(color='#000000', width=2), showlegend=False
+                x=[offset_x+0, offset_x+box_l, offset_x+box_l, offset_x+0, offset_x+0, offset_x+0, offset_x+box_l, offset_x+box_l, offset_x+0, offset_x+0, offset_x+0, offset_x+0, offset_x+box_l, offset_x+box_l, offset_x+box_l, offset_x+box_l],
+                y=[0, 0, box_w, box_w, 0, 0, 0, box_w, box_w, 0, 0, box_w, box_w, 0, 0, box_w],
+                z=[0, 0, 0, 0, 0, box_h, box_h, box_h, box_h, box_h, 0, box_h, box_h, box_h, 0, 0],
+                mode='lines', line=dict(color='#000000', width=6), name=label
             ))
 
-        # legend 去重（保留你原檔）
+        if not bins:
+            # 至少畫一個空箱
+            draw_box(0, "外箱")
+        else:
+            for bi, b in enumerate(bins):
+                ox = bi * spacing
+                draw_box(ox, "外箱" if bi == 0 else f"外箱_{bi+1}")
+
+                for it in b:
+                    name = it["name"]
+                    color = product_colors.get(name, "#888")
+                    x, y, z = it["x"], it["y"], it["z"]
+                    dx, dy, dz = it["dx"], it["dy"], it["dz"]
+                    wgt = it["weight"]
+
+                    hover_text = f"{name}<br>實際佔用: {dx}x{dy}x{dz}<br>重量: {wgt:.2f}kg<br>位置:({x},{y},{z})<br>箱: {bi+1}"
+
+                    fig.add_trace(go.Mesh3d(
+                        x=[ox+x, ox+x+dx, ox+x+dx, ox+x, ox+x, ox+x+dx, ox+x+dx, ox+x],
+                        y=[y, y, y+dy, y+dy, y, y, y+dy, y+dy],
+                        z=[z, z, z, z, z+dz, z+dz, z+dz, z+dz],
+                        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                        j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                        k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                        color=color, opacity=1, name=name, showlegend=True,
+                        text=hover_text, hoverinfo='text',
+                        lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1, roughness=0.5),
+                        lightposition=dict(x=1000, y=1000, z=2000)
+                    ))
+
+                    fig.add_trace(go.Scatter3d(
+                        x=[ox+x, ox+x+dx, ox+x+dx, ox+x, ox+x, ox+x, ox+x+dx, ox+x+dx, ox+x, ox+x, ox+x, ox+x, ox+x+dx, ox+x+dx, ox+x+dx, ox+x+dx],
+                        y=[y, y, y+dy, y+dy, y, y, y, y, y+dy, y+dy, y, y+dy, y+dy, y, y, y+dy],
+                        z=[z, z, z, z, z, z+dz, z+dz, z+dz, z+dz, z+dz, z, z+dz, z+dz, z+dz, z, z],
+                        mode='lines', line=dict(color='#000000', width=2), showlegend=False
+                    ))
+
+        # legend 去重（保留你原本做法）
         names = set()
         fig.for_each_trace(lambda trace: trace.update(showlegend=False) if (trace.name in names) else names.add(trace.name))
 
-        # 報表（保留你原檔欄位）
-        box_vol = box_l * box_w * box_h
-        utilization = (total_vol / box_vol) * 100 if box_vol > 0 else 0
-        gross_weight = total_net_weight + box_weight
-
-        tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-        now_str = tw_time.strftime("%Y-%m-%d %H:%M")
-        file_time_str = tw_time.strftime("%Y%m%d_%H%M")
-
-        all_fitted = True
-        missing_items_html = ""
-        for name, req_qty in requested_counts.items():
-            real_qty = packed_counts.get(name, 0)
-            if real_qty < req_qty:
-                all_fitted = False
-                diff = req_qty - real_qty
-                missing_items_html += f"<li style='color: #D8000C; background-color: #FFD2D2; padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold;'>⚠️ {name}: 遺漏 {diff} 個</li>"
-
-        status_html = "<h3 style='color: #155724; background-color: #d4edda; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #c3e6cb;'>✅ 完美！所有商品皆已裝入。</h3>" if all_fitted else f"<h3 style='color: #721c24; background-color: #f8d7da; padding: 10px; border-radius: 8px; border: 1px solid #f5c6cb;'>❌ 注意：有部分商品裝不下！</h3><ul style='padding-left: 20px;'>{missing_items_html}</ul>"
-
-        report_html = f"""
-        <div class="report-card">
-            <h2 style="margin-top:0; color: #2c3e50; border-bottom: 3px solid #2c3e50; padding-bottom: 10px;">📋 訂單裝箱報告</h2>
-            <table style="border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 1.1em;">
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📝 訂單名稱:</td><td style="color: #0056b3; font-weight: bold;">{order_name}</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">🕒 計算時間:</td><td>{now_str} (台灣時間)</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">📦 外箱尺寸:</td><td>{box_l} x {box_w} x {box_h} cm</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555;">⚖️ 內容淨重:</td><td>{total_net_weight:.2f} kg</td></tr>
-                <tr style="border-bottom: 1px solid #eee;"><td style="padding: 12px 5px; font-weight: bold; color: #555; color: #d9534f;">🚛 本箱總重:</td><td style="color: #d9534f; font-weight: bold; font-size: 1.2em;">{gross_weight:.2f} kg</td></tr>
-                <tr><td style="padding: 12px 5px; font-weight: bold; color: #555;">📊 空間利用率:</td><td>{utilization:.2f}%</td></tr>
-            </table>
-            {status_html}
-        </div>
-        """
-
-        st.markdown('<div class="section-header">3. 裝箱結果與模擬</div>', unsafe_allow_html=True)
-        st.markdown(report_html, unsafe_allow_html=True)
-
+        # 下載報告（保留你原本格式）
         full_html_content = f"""
         <html>
         <head>
