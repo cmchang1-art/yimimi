@@ -8,10 +8,6 @@ from itertools import permutations
 import plotly.graph_objects as go
 import time
 
-import streamlit as st
-st.write("Streamlit version:", st.__version__)
-
-
 # ==========================
 # 檔案持久化（本機 JSON）
 # ==========================
@@ -408,53 +404,27 @@ st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_s
 # ✅ UI 修正：按鈕分色 + Plotly 強制白底
 st.markdown("""
 <style>
-  /* ===== 全域：強制亮色可讀 ===== */
   .stApp { background:#ffffff !important; color:#111 !important; }
-  .stMarkdown, .stCaption, label, p, span, small { color:#111 !important; }
+  [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stDecoration"],
+  .stDeployButton, footer, #MainMenu, [data-testid="stToolbar"] { display:none !important; }
+  [data-testid="stHeader"] { background-color:transparent !important; pointer-events:none; }
 
-  /* ===== 你截圖裡的怪圓角長條：就是 marker div 被渲染出來 → 全部隱形 ===== */
-  .btn-add, .btn-del, .btn-save, .btn-load, .btn-run {
-    display:none !important;
-    height:0 !important;
-    margin:0 !important;
-    padding:0 !important;
+  .section-header{
+    font-size:1.15rem; font-weight:900; color:#111;
+    margin:10px 0 6px 0; border-left:5px solid #FF4B4B; padding-left:10px;
   }
+  .stCaption, .stMarkdown, label, p, span, small { color:#111 !important; }
 
-  /* ===== Streamlit 按鈕：先做一個「不會黑底黑字」的安全底色 ===== */
-  div[data-testid="stButton"] > button,
-  div.stButton > button,
-  button[kind]{
+  [data-testid="stExpander"]>details>summary{
     background:#F3F4F6 !important;
     color:#111 !important;
-    border:1px solid #D1D5DB !important;
     border-radius:12px !important;
+    padding:10px 12px !important;
     font-weight:900 !important;
-    padding:10px 14px !important;
+    border:1px solid #E5E7EB !important;
   }
+  [data-testid="stExpander"]>details>summary svg{ color:#111 !important; }
 
-  /* ===== 分類上色：用「marker + 下一顆 stButton」的穩定版本（同時支援 stButton / data-testid） ===== */
-  .btn-add + div[data-testid="stButton"] > button,
-  .btn-add + div.stButton > button{
-    background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
-  }
-  .btn-del + div[data-testid="stButton"] > button,
-  .btn-del + div.stButton > button{
-    background:#FEE2E2 !important; border-color:#EF4444 !important; color:#991B1B !important;
-  }
-  .btn-save + div[data-testid="stButton"] > button,
-  .btn-save + div.stButton > button{
-    background:#DBEAFE !important; border-color:#3B82F6 !important; color:#1E3A8A !important;
-  }
-  .btn-load + div[data-testid="stButton"] > button,
-  .btn-load + div.stButton > button{
-    background:#E5E7EB !important; border-color:#9CA3AF !important; color:#111827 !important;
-  }
-  .btn-run + div[data-testid="stButton"] > button,
-  .btn-run + div.stButton > button{
-    background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
-  }
-
-  /* ===== 你的深色表格（data_editor）保持深色，但文字要亮 ===== */
   div[data-testid="stDataFrame"]{
     background:#0B1220 !important;
     border-radius:12px !important;
@@ -463,22 +433,65 @@ st.markdown("""
   }
   div[data-testid="stDataFrame"] * { color:#E5E7EB !important; }
 
-  /* ===== Plotly/3D 強制白底（避免黑底） ===== */
-  [data-testid="stPlotlyChart"],
+  div[data-baseweb="input"] input{
+    background:#fff !important;
+    color:#111 !important;
+    border:1px solid #D1D5DB !important;
+    border-radius:10px !important;
+  }
+  div[data-baseweb="select"]>div{
+    background:#fff !important;
+    color:#111 !important;
+    border:1px solid #D1D5DB !important;
+    border-radius:10px !important;
+  }
+
+  .panel{
+    background:#FFFFFF;
+    border:1px solid #E5E7EB;
+    border-radius:14px;
+    padding:14px 14px 10px 14px;
+    box-shadow:0 6px 18px rgba(0,0,0,0.04);
+    margin-bottom:12px;
+  }
+
+  /* ✅ 按鈕預設中性 */
+  .stButton>button{
+    background:#F3F4F6 !important; color:#111 !important;
+    border:1px solid #D1D5DB !important;
+    border-radius:12px !important;
+    font-weight:900 !important;
+    padding:10px 14px !important;
+  }
+
+  /* ✅ 你指定的分級配色（用 marker class 精準套到下一個 button） */
+  .btn-add + div.stButton > button{
+    background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
+  }
+  .btn-del + div.stButton > button{
+    background:#FEE2E2 !important; border-color:#EF4444 !important; color:#991B1B !important;
+  }
+  .btn-save + div.stButton > button{
+    background:#DBEAFE !important; border-color:#3B82F6 !important; color:#1E3A8A !important;
+  }
+  .btn-load + div.stButton > button{
+    background:#E5E7EB !important; border-color:#9CA3AF !important; color:#111827 !important;
+  }
+  .btn-run + div.stButton > button{
+    background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
+  }
+
+  /* ✅ Plotly 強制白底：解黑底 */
+  [data-testid="stPlotlyChart"]{
+    background:#ffffff !important;
+    border-radius:14px !important;
+    border:1px solid #E5E7EB !important;
+    padding:10px !important;
+  }
   .js-plotly-plot, .plotly, .main-svg{
     background:#ffffff !important;
   }
-
-  /* ===== 標題區塊：純線條，不要黑底 ===== */
-  .section-header{
-    font-size:1.15rem; font-weight:900; color:#111 !important;
-    margin:10px 0 6px 0;
-    border-left:5px solid #FF4B4B;
-    padding-left:10px;
-    background:transparent !important;
-  }
 </style>
-
 """, unsafe_allow_html=True)
 
 st.title("📦 3D裝箱系統")
