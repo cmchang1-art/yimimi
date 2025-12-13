@@ -1,3 +1,22 @@
+# =========================================================
+# 3D 裝箱系統 - 單檔模組化穩定版 (Stable Editor + No Double Click)
+# =========================================================
+
+import os
+import json
+import math
+import random
+import datetime
+from itertools import permutations
+from typing import Dict, List, Tuple, Any
+
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
+
+
+
+
 import requests, json
 import streamlit as st
 
@@ -17,25 +36,6 @@ with st.sidebar:
         code, text = _gs_ping()
         st.write("HTTP:", code)
         st.code(text)
-
-
-
-
-# =========================================================
-# 3D 裝箱系統 - 單檔模組化穩定版 (Stable Editor + No Double Click)
-# =========================================================
-
-import os
-import json
-import math
-import random
-import datetime
-from itertools import permutations
-from typing import Dict, List, Tuple, Any
-
-import pandas as pd
-import streamlit as st
-import plotly.graph_objects as go
 
 
 # =========================================================
