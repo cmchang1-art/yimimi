@@ -6,7 +6,6 @@ import json
 import os
 from itertools import permutations
 import plotly.graph_objects as go
-import time
 
 # ==========================
 # 檔案持久化（本機 JSON）
@@ -318,7 +317,6 @@ def best_single_bin_if_possible(items, candidate_bins):
                 used_vol = sum(p["dx"] * p["dy"] * p["dz"] for p in placed)
                 bin_vol = b["長"] * b["寬"] * b["高"]
                 waste = bin_vol - used_vol
-
                 metric = (bin_vol, waste)
                 if best is None or metric < best_metric:
                     best = {"bins": [placed], "bin_defs": [b], "unplaced": []}
@@ -401,7 +399,7 @@ def pack_with_inventory(items, inventory_bins):
 # ==========================
 st.set_page_config(layout="wide", page_title="3D裝箱系統", initial_sidebar_state="collapsed")
 
-# ✅ UI 修正：按鈕分色 + Plotly 強制白底
+# ✅ UI 修正：按鈕分色 + Plotly 強制白底 + 避免深色模式把按鈕變黑
 st.markdown("""
 <style>
   .stApp { background:#ffffff !important; color:#111 !important; }
@@ -481,7 +479,7 @@ st.markdown("""
     background:#D1FAE5 !important; border-color:#10B981 !important; color:#065F46 !important;
   }
 
-  /* ✅ Plotly 強制白底：解黑底 */
+  /* ✅ Plotly 強制白底：解白/黑底導致看不到 */
   [data-testid="stPlotlyChart"]{
     background:#ffffff !important;
     border-radius:14px !important;
@@ -876,7 +874,7 @@ if run_button:
         </div>
         """, unsafe_allow_html=True)
 
-        # ✅ Plotly 強制白底（含下載報告）
+        # ✅ Plotly 強制白底（含下載報告）避免白一片/黑一片
         fig = go.Figure()
         axis_config = dict(
             backgroundcolor="white", showbackground=True,
@@ -982,6 +980,7 @@ if run_button:
         """
         file_name = f"{order_name.replace(' ', '_')}_{file_time_str}_總數{total_qty}.html"
 
+        # ✅ 下載按鈕：淡灰（載入等級），不會再黑底看不到
         st.markdown('<div class="btn-load"></div>', unsafe_allow_html=True)
         st.download_button(
             label="📥 下載完整裝箱報告 (.html)",
