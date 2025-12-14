@@ -118,9 +118,15 @@ def _ensure_defaults():
     if 'last_result' not in st.session_state:
         st.session_state.last_result=None
 
+    # ✅ 重要：保存 data_editor 回傳的 DataFrame（避免去拿 session_state['box_editor'] 那種編輯狀態）
+    if 'box_editor_df' not in st.session_state:
+        st.session_state.box_editor_df = st.session_state.df_box.copy()
+    if 'prod_editor_df' not in st.session_state:
+        st.session_state.prod_editor_df = st.session_state.df_prod.copy()
+
 def _sanitize_box(df:pd.DataFrame)->pd.DataFrame:
     cols=['選取','名稱','長','寬','高','數量','空箱重量']
-    if df is None:
+    if df is None or not isinstance(df, pd.DataFrame):
         df=pd.DataFrame()
     df=df.copy()
     for c in cols:
@@ -143,7 +149,7 @@ def _sanitize_box(df:pd.DataFrame)->pd.DataFrame:
 
 def _sanitize_prod(df:pd.DataFrame)->pd.DataFrame:
     cols=['選取','商品名稱','長','寬','高','重量(kg)','數量']
-    if df is None:
+    if df is None or not isinstance(df, pd.DataFrame):
         df=pd.DataFrame()
     df=df.copy()
     for c in cols:
@@ -234,12 +240,14 @@ def _prod_from(payload):
         })
     return _sanitize_prod(pd.DataFrame(out))
 
-def _get_latest_df(df_key:str, edited_key:Optional[str], sanitize_fn):
-    raw = st.session_state.get(edited_key) if edited_key else None
-    if raw is None:
+def _get_latest_df(df_key:str, editor_df_key:str, sanitize_fn):
+    # ✅ 永遠用我們自己存的 *_editor_df（DataFrame），不要用 data_editor 的 key
+    raw = st.session_state.get(editor_df_key)
+    if raw is None or not isinstance(raw, pd.DataFrame):
         raw = st.session_state.get(df_key)
     df = sanitize_fn(raw)
     st.session_state[df_key] = df
+    st.session_state[editor_df_key] = df.copy()
     return df
 
 def template_block(
@@ -247,7 +255,7 @@ def template_block(
     sheet:str,
     active_key:str,
     df_key:str,
-    edited_key:Optional[str],
+    editor_df_key:str,
     sanitize_fn,
     to_payload,
     from_payload,
@@ -258,7 +266,6 @@ def template_block(
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
 
-    # 拉最新清單
     tpl_list = sorted(gas.list_names(sheet))
     names = ['(無)'] + tpl_list
 
@@ -266,7 +273,6 @@ def template_block(
     del_key = f'{key_prefix}_del_sel'
     new_key = f'{key_prefix}_new'
 
-    # 避免刪除後 session_state 還卡住舊值
     if st.session_state.get(sel_key) not in names:
         st.session_state[sel_key] = '(無)'
     if st.session_state.get(del_key) not in names:
@@ -274,7 +280,6 @@ def template_block(
 
     active_now = (st.session_state.get(active_key) or '').strip()
 
-    # ✅ 依你箭頭：每個按鈕放在自己的欄位下方
     c1, c2, c3 = st.columns([1.15, 1.15, 1.15], gap='large')
 
     with c1:
@@ -300,7 +305,9 @@ def template_block(
                 st.error('載入失敗：請確認雲端連線 / 權限')
             else:
                 try:
-                    st.session_state[df_key]=from_payload(payload)
+                    df_loaded = from_payload(payload)
+                    st.session_state[df_key]=df_loaded
+                    st.session_state[editor_df_key]=df_loaded.copy()
                     st.session_state[active_key]=sel
                     st.success(f'已載入：{sel}')
                     st.rerun()
@@ -308,8 +315,7 @@ def template_block(
                     st.error(f'載入解析失敗：{e}')
 
     if save_btn:
-        # ✅ 儲存一定抓「最新編輯中的表格」內容（不用先按套用也能存）
-        current_df = _get_latest_df(df_key, edited_key, sanitize_fn)
+        current_df = _get_latest_df(df_key, editor_df_key, sanitize_fn)
         payload = to_payload(current_df)
 
         nm=(new_name or '').strip()
@@ -322,7 +328,6 @@ def template_block(
             else:
                 st.error(msg)
         else:
-            # 留空 = 更新目前套用模板（你說的「儲存更新」）
             if not active_now:
                 st.warning('目前沒有套用中的模板；若要另存新模板，請輸入「另存為模板名稱」。')
             else:
@@ -341,7 +346,6 @@ def template_block(
             if ok:
                 if st.session_state.get(active_key)==del_sel:
                     st.session_state[active_key]=''
-                # 清掉下拉殘影
                 st.session_state[sel_key]='(無)'
                 st.session_state[del_key]='(無)'
                 st.success(f'{msg}：{del_sel}')
@@ -354,9 +358,10 @@ def box_table_block():
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
 
     df=_sanitize_box(st.session_state.df_box)
+
     edited=st.data_editor(
         df,
-        key='box_editor',
+        key='box_editor',  # ✅ 這個 key 只給 streamlit 用，不能拿來當 df
         hide_index=True,
         num_rows='dynamic',
         use_container_width=True,
@@ -372,6 +377,9 @@ def box_table_block():
         }
     )
 
+    # ✅ 這才是 DataFrame：我們自己存起來
+    st.session_state.box_editor_df = edited.copy()
+
     b1,b2,b3=st.columns([1,1,1],gap='medium')
     with b1:
         apply_btn=st.button('✅ 套用變更（外箱表格）', use_container_width=True, key='box_apply')
@@ -382,14 +390,17 @@ def box_table_block():
 
     if apply_btn:
         st.session_state.df_box=_sanitize_box(edited)
+        st.session_state.box_editor_df = st.session_state.df_box.copy()
         st.success('已套用外箱表格變更')
     if del_btn:
         d=_sanitize_box(edited)
         d=d[~d['選取']].reset_index(drop=True)
         st.session_state.df_box=_sanitize_box(d)
+        st.session_state.box_editor_df = st.session_state.df_box.copy()
         st.success('已刪除勾選外箱')
     if clear_btn:
         st.session_state.df_box=_sanitize_box(pd.DataFrame())
+        st.session_state.box_editor_df = st.session_state.df_box.copy()
         st.success('已清除並重置外箱')
 
 def prod_table_block():
@@ -397,9 +408,10 @@ def prod_table_block():
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
 
     df=_sanitize_prod(st.session_state.df_prod)
+
     edited=st.data_editor(
         df,
-        key='prod_editor',
+        key='prod_editor',  # ✅ 這個 key 只給 streamlit 用，不能拿來當 df
         hide_index=True,
         num_rows='dynamic',
         use_container_width=True,
@@ -415,6 +427,9 @@ def prod_table_block():
         }
     )
 
+    # ✅ 這才是 DataFrame：我們自己存起來
+    st.session_state.prod_editor_df = edited.copy()
+
     b1,b2,b3=st.columns([1,1,1],gap='medium')
     with b1:
         apply_btn=st.button('✅ 套用變更（商品表格）', use_container_width=True, key='prod_apply')
@@ -425,14 +440,17 @@ def prod_table_block():
 
     if apply_btn:
         st.session_state.df_prod=_sanitize_prod(edited)
+        st.session_state.prod_editor_df = st.session_state.df_prod.copy()
         st.success('已套用商品表格變更')
     if del_btn:
         d=_sanitize_prod(edited)
         d=d[~d['選取']].reset_index(drop=True)
         st.session_state.df_prod=_sanitize_prod(d)
+        st.session_state.prod_editor_df = st.session_state.df_prod.copy()
         st.success('已刪除勾選商品')
     if clear_btn:
         st.session_state.df_prod=_sanitize_prod(pd.DataFrame())
+        st.session_state.prod_editor_df = st.session_state.df_prod.copy()
         st.success('已清除並重置商品')
 
 def _choose_box(df_box:pd.DataFrame)->Optional[Dict[str,Any]]:
@@ -464,16 +482,10 @@ def _build_items(df_prod:pd.DataFrame)->List[Item]:
             continue
         nm=r['商品名稱'] or '商品'
         for i in range(qty):
-            # py3dbp: Item(name, width, height, depth, weight)
-            # 我們用 長=width(x), 寬=height(y), 高=depth(z) 來保持直覺 (長寬高)
             items.append(Item(f"{nm}_{i+1}", float(r['長']), float(r['寬']), float(r['高']), float(r['重量(kg)'])))
     return items
 
 def _item_dims_xyz(it:Item)->Tuple[float,float,float]:
-    """
-    py3dbp 的 item 實際擺放尺寸會受 rotation_type 影響，
-    但最可靠是用 width/height/depth（通常已是旋轉後的值）。
-    """
     w = _to_float(getattr(it, 'width', 0))
     h = _to_float(getattr(it, 'height', 0))
     d = _to_float(getattr(it, 'depth', 0))
@@ -486,7 +498,6 @@ def _item_pos_xyz(it:Item)->Tuple[float,float,float]:
     return (_to_float(pos[0]), _to_float(pos[1]), _to_float(pos[2]))
 
 def _muted_palette():
-    # 低彩度、偏專業（避免太花）
     return [
         "#2F3A4A", "#475569", "#64748B", "#334155",
         "#3F4E4F", "#5B6B6B", "#6B7280", "#4B5563",
@@ -499,7 +510,6 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item])->Tuple[go.Figure, Dict[st
 
     L,W,H=box['l'],box['w'],box['h']
 
-    # 外箱線框
     edges=[
         ((0,0,0),(L,0,0)),((L,0,0),(L,W,0)),((L,W,0),(0,W,0)),((0,W,0),(0,0,0)),
         ((0,0,H),(L,0,H)),((L,0,H),(L,W,H)),((L,W,H),(0,W,H)),((0,W,H),(0,0,H)),
@@ -508,44 +518,27 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item])->Tuple[go.Figure, Dict[st
     for a,b in edges:
         fig.add_trace(go.Scatter3d(
             x=[a[0],b[0]],y=[a[1],b[1]],z=[a[2],b[2]],
-            mode='lines',
-            line=dict(width=4,color='#111'),
-            hoverinfo='skip',
-            showlegend=False
+            mode='lines', line=dict(width=4,color='#111'),
+            hoverinfo='skip', showlegend=False
         ))
 
-    # 建立商品顏色對應（以商品 base name 穩定分配）
     base_names=[]
     for it in fitted:
         base=str(getattr(it,'name','商品')).split('_')[0]
         if base not in base_names:
             base_names.append(base)
-    color_map={}
-    for i,bn in enumerate(base_names):
-        color_map[bn] = palette[i % len(palette)]
+    color_map={bn: palette[i % len(palette)] for i,bn in enumerate(base_names)}
 
-    # legend（外箱 + 商品）
-    fig.add_trace(go.Scatter3d(
-        x=[None],y=[None],z=[None],
-        mode='markers',
-        marker=dict(size=8,color="#111"),
-        name="外箱",
-        showlegend=True
-    ))
+    fig.add_trace(go.Scatter3d(x=[None],y=[None],z=[None], mode='markers',
+                               marker=dict(size=8,color="#111"), name="外箱", showlegend=True))
     for bn, c in color_map.items():
-        fig.add_trace(go.Scatter3d(
-            x=[None],y=[None],z=[None],
-            mode='markers',
-            marker=dict(size=8,color=c),
-            name=bn,
-            showlegend=True
-        ))
+        fig.add_trace(go.Scatter3d(x=[None],y=[None],z=[None], mode='markers',
+                                   marker=dict(size=8,color=c), name=bn, showlegend=True))
 
-    # 畫每個 item（用 width/height/depth 對應 x/y/z，避免穿透/浮空的視覺錯誤）
     faces=[
-        (0,1,2),(0,2,3),   # bottom
-        (4,5,6),(4,6,7),   # top
-        (0,1,5),(0,5,4),   # side
+        (0,1,2),(0,2,3),
+        (4,5,6),(4,6,7),
+        (0,1,5),(0,5,4),
         (1,2,6),(1,6,5),
         (2,3,7),(2,7,6),
         (3,0,4),(3,4,7)
@@ -557,17 +550,15 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item])->Tuple[go.Figure, Dict[st
         c=color_map.get(base, palette[0])
 
         px,py,pz = _item_pos_xyz(it)
-        dx,dy,dz = _item_dims_xyz(it)  # x=width, y=height, z=depth (這裡用 長寬高對應)
+        dx,dy,dz = _item_dims_xyz(it)
 
-        # 8 vertices
         vx=[px,px+dx,px+dx,px,  px,px+dx,px+dx,px]
         vy=[py,py,py+dy,py+dy, py,py,py+dy,py+dy]
         vz=[pz,pz,pz,pz,      pz+dz,pz+dz,pz+dz,pz+dz]
 
         fig.add_trace(go.Mesh3d(
             x=vx,y=vy,z=vz,i=I,j=J,k=K,
-            opacity=0.9,
-            color=c,
+            opacity=0.9, color=c,
             hovertemplate=f"{it.name}<br>尺寸:{dx:.2f}×{dy:.2f}×{dz:.2f}<extra></extra>",
             showlegend=False
         ))
@@ -664,7 +655,6 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
         return {'ok':False,'error':'請至少勾選 1 個商品（且數量>0、尺寸>0）'}
 
     packer=Packer()
-    # py3dbp: Bin(name, width, height, depth, max_weight)
     packer.add_bin(Bin(box['name'], box['l'], box['w'], box['h'], 999999))
     for it in items:
         packer.add_item(it)
@@ -710,9 +700,11 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
-        # 抓最新編輯（避免你剛改完沒按套用就算不到）
-        st.session_state.df_box=_sanitize_box(st.session_state.get('box_editor', st.session_state.df_box))
-        st.session_state.df_prod=_sanitize_prod(st.session_state.get('prod_editor', st.session_state.df_prod))
+        # ✅ 用 editor_df（真正 DataFrame）來算
+        st.session_state.df_box=_sanitize_box(st.session_state.get('box_editor_df', st.session_state.df_box))
+        st.session_state.df_prod=_sanitize_prod(st.session_state.get('prod_editor_df', st.session_state.df_prod))
+        st.session_state.box_editor_df = st.session_state.df_box.copy()
+        st.session_state.prod_editor_df = st.session_state.df_prod.copy()
 
         with st.spinner('計算中...'):
             st.session_state.last_result=pack_and_render(st.session_state.order_name, st.session_state.df_box, st.session_state.df_prod)
@@ -745,7 +737,6 @@ def result_block():
     else:
         st.success('✅ 裝箱成功：全部商品已放入外箱')
 
-    # 顏色對應（Streamlit 也顯示）
     color_map = res.get('color_map') or {}
     if color_map:
         chips=[]
@@ -789,11 +780,11 @@ def main():
         left,right=st.columns(2,gap='large')
         with left:
             st.markdown('## 1. 訂單與外箱')
-            template_block('箱型模板', SHEET_BOX, 'active_box_tpl', 'df_box', 'box_editor', _sanitize_box, _box_payload, _box_from, 'box_tpl')
+            template_block('箱型模板', SHEET_BOX, 'active_box_tpl', 'df_box', 'box_editor_df', _sanitize_box, _box_payload, _box_from, 'box_tpl')
             box_table_block()
         with right:
             st.markdown('## 2. 商品清單')
-            template_block('商品模板', SHEET_PROD, 'active_prod_tpl', 'df_prod', 'prod_editor', _sanitize_prod, _prod_payload, _prod_from, 'prod_tpl')
+            template_block('商品模板', SHEET_PROD, 'active_prod_tpl', 'df_prod', 'prod_editor_df', _sanitize_prod, _prod_payload, _prod_from, 'prod_tpl')
             prod_table_block()
 
         st.divider()
@@ -801,12 +792,12 @@ def main():
 
     else:
         st.markdown('## 1. 訂單與外箱')
-        template_block('箱型模板', SHEET_BOX, 'active_box_tpl', 'df_box', 'box_editor', _sanitize_box, _box_payload, _box_from, 'box_tpl_v')
+        template_block('箱型模板', SHEET_BOX, 'active_box_tpl', 'df_box', 'box_editor_df', _sanitize_box, _box_payload, _box_from, 'box_tpl_v')
         box_table_block()
 
         st.divider()
         st.markdown('## 2. 商品清單')
-        template_block('商品模板', SHEET_PROD, 'active_prod_tpl', 'df_prod', 'prod_editor', _sanitize_prod, _prod_payload, _prod_from, 'prod_tpl_v')
+        template_block('商品模板', SHEET_PROD, 'active_prod_tpl', 'df_prod', 'prod_editor_df', _sanitize_prod, _prod_payload, _prod_from, 'prod_tpl_v')
         prod_table_block()
 
         st.divider()
