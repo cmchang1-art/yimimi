@@ -591,8 +591,11 @@ def run_packing(order_name: str, box_df_now: pd.DataFrame, prod_df_now: pd.DataF
     box_df_now = norm_box_df(box_df_now)
     prod_df_now = norm_prod_df(prod_df_now)
 
-    boxes = box_df_now[(box_df_now["選取"]) & (box_df_now["數量"] > 0)].copy()
-    prods = prod_df_now[(prod_df_now["選取"]) & (prods_df_now := prod_df_now)["數量"] > 0].copy()
+    # ✅ 外箱：勾選 + 數量>0
+    boxes = box_df_now[(box_df_now["選取"] == True) & (box_df_now["數量"] > 0)].copy()
+
+    # ✅ 商品：勾選 + 數量>0
+    prods = prod_df_now[(prod_df_now["選取"] == True) & (prod_df_now["數量"] > 0)].copy()
 
     if boxes.empty:
         st.error("請至少勾選 1 個外箱（且數量 > 0）")
@@ -601,10 +604,12 @@ def run_packing(order_name: str, box_df_now: pd.DataFrame, prod_df_now: pd.DataF
         st.error("請至少勾選 1 個商品（且數量 > 0）")
         return
 
+    # 目前先用第一個勾選外箱（你可之後再擴充多箱）
     box_row = boxes.iloc[0]
     box_dims = (float(box_row["長"]), float(box_row["寬"]), float(box_row["高"]))
     box_weight = float(box_row["空箱重量"])
 
+    # 展開商品成單件
     items: List[Tuple[str, float, float, float, float]] = []
     for _, r in prods.iterrows():
         name = str(r["商品名稱"]).strip() or "商品"
@@ -624,7 +629,7 @@ def run_packing(order_name: str, box_df_now: pd.DataFrame, prod_df_now: pd.DataF
 
     st.markdown("<div class='section-title'>3. 裝箱結果與模擬</div>", unsafe_allow_html=True)
 
-    content_weight = float(prods.apply(lambda r: float(r["重量(kg)"]) * int(r["數量"]), axis=1).sum())
+    content_weight = float((prods["重量(kg)"] * prods["數量"]).sum())
     total_weight = content_weight + box_weight
 
     st.markdown(
@@ -654,6 +659,7 @@ def run_packing(order_name: str, box_df_now: pd.DataFrame, prod_df_now: pd.DataF
         key="download_report_btn",
         use_container_width=True,
     )
+
 
 # ----------------------------
 # 版面渲染
