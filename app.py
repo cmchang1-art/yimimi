@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
+from decimal import Decimal
 
 import pandas as pd
 import streamlit as st
@@ -227,8 +228,11 @@ def try_pack_once(bin_dims: Tuple[float, float, float], items: List[Tuple[str, f
         raise RuntimeError("py3dbp 未安裝或匯入失敗，請確認 requirements.txt")
 
     L, W, H = bin_dims
+    # py3dbp 內部會使用 Decimal 進行計算；部分版本若輸入 float，可能產生 Decimal/float 混算錯誤
+    # 這裡統一用 Decimal(str()) 傳入，避免「unsupported operand type(s) for /: 'decimal.Decimal' and 'float'」
+    D = lambda v: Decimal(str(float(v)))
     packer = Packer()
-    packer.add_bin(Bin("box", L, W, H, 999999))
+    packer.add_bin(Bin("box", D(L), D(W), D(H), D(999999)))
 
     def key_volume(x): return _volume(x[1], x[2], x[3])
     def key_maxedge(x): return max(x[1], x[2], x[3])
@@ -244,15 +248,16 @@ def try_pack_once(bin_dims: Tuple[float, float, float], items: List[Tuple[str, f
         items2 = items[:]
 
     for (name, l, w, h, weight) in items2:
-        packer.add_item(Item(name, l, w, h, weight))
+        packer.add_item(Item(name, D(l), D(w), D(h), D(weight)))
 
     packer.pack()
     b = packer.bins[0]
     fitted = b.items
     unfitted = b.unfitted_items
 
-    fitted_vol = sum(_volume(i.width, i.height, i.depth) for i in fitted)
-    util = fitted_vol / _volume(L, W, H) if _volume(L, W, H) > 0 else 0.0
+    fitted_vol = sum(_volume(float(i.width), float(i.height), float(i.depth)) for i in fitted)
+    box_vol = _volume(float(L), float(W), float(H))
+    util = (fitted_vol / box_vol) if box_vol > 0 else 0.0
     return PackedResult(fitted_items=fitted, unfitted_items=unfitted, bin=b, utilization=util)
 
 
@@ -296,8 +301,18 @@ def make_plotly_3d(bin_dims: Tuple[float, float, float], packed: PackedResult) -
         ))
 
     for idx, it in enumerate(packed.fitted_items):
-        x0, y0, z0 = it.position
-        add_box(x0, y0, z0, it.width, it.height, it.depth, PALETTE[idx % len(PALETTE)], it.name)
+        # py3dbp 可能回傳 Decimal，Plotly 需 float
+        x0, y0, z0 = [float(v) for v in it.position]
+        add_box(
+            x0,
+            y0,
+            z0,
+            float(it.width),
+            float(it.height),
+            float(it.depth),
+            PALETTE[idx % len(PALETTE)],
+            str(it.name),
+        )
 
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
@@ -401,16 +416,17 @@ st.session_state.layout_mode = layout_mode
 # ----------------------------
 # UI：模板控制（按你要求「不要亂拆」→ 三欄固定排版）
 # ----------------------------
-def template_block(prefix: str, title: str, sheet: str, current_name_key: str, table_kind: str, show_clear: bool = True) -> None:
+def template_block(prefix: str, title: str, sheet: str, current_name_key: str, table_kind: str) -> None:
     st.markdown(f"<div class='section-title'>{title}（載入 / 儲存 / 刪除）</div>", unsafe_allow_html=True)
 
     if not _gas_enabled():
-        st.info("尚未設定 Streamlit Secrets（GAS_URL/GAS_TOKEN 或 GS_WEBAPP_URL/GS_TOKEN）。模板功能會停用。")
+        st.info("尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能會停用。")
         return
 
     names = ["(無)"] + gas_list(sheet)
 
-    c1, c2, c3 = st.columns([1.2, 1.2, 1.2], gap="small")
+    # 版型功能區：左(選擇/命名)｜中(載入/儲存)｜右(刪除)
+    c1, c2, c3 = st.columns([2.4, 1.6, 2.4], gap="small")
 
     with c1:
         sel = st.selectbox("選擇模板", names, key=f"{prefix}_tpl_sel")
@@ -423,11 +439,6 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
         st.write("")
         load_btn = st.button("⬇️ 載入模板", key=f"{prefix}_btn_load", use_container_width=True)
         save_btn = st.button("💾 儲存模板", key=f"{prefix}_btn_save", use_container_width=True)
-        clear_btn = None
-        if show_clear:
-            clear_btn = None
-        if show_clear:
-            clear_btn = st.button("🧹 清除全部", key=f"{prefix}_btn_clear", use_container_width=True)
 
     with c3:
         del_sel = st.selectbox("要刪除的模板", names, key=f"{prefix}_tpl_del")
@@ -440,11 +451,13 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
                 st.error("載入失敗：找不到模板或雲端連線問題")
             else:
                 try:
-                    data = json.loads(payload) if payload else {}
+                    data = json.loads(payload) if payload else []
+                    # 兼容兩種格式：舊版可能直接存 list；新版存 {"rows": [...]} 
+                    rows = data.get("rows", data.get("data", [])) if isinstance(data, dict) else data
                     if table_kind == "box":
-                        st.session_state.box_df = norm_box_df(data.get("rows", []))
+                        st.session_state.box_df = norm_box_df(rows)
                     else:
-                        st.session_state.prod_df = norm_prod_df(data.get("rows", []))
+                        st.session_state.prod_df = norm_prod_df(rows)
                     st.session_state[current_name_key] = sel
                     st.success(f"已載入：{sel}")
                     st.cache_data.clear()
@@ -483,16 +496,6 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
                 st.error(f"刪除失敗：{res.get('error','請確認雲端連線 / 權限')}")
         else:
             st.warning("請先選擇要刪除的模板")
-
-    if clear_btn:
-        if table_kind == "box":
-            st.session_state.box_df = pd.DataFrame([{c: (False if c=="選取" else 0) for c in DEFAULT_BOX_COLS}], columns=DEFAULT_BOX_COLS)
-            st.session_state.box_current_tpl = ""
-        else:
-            st.session_state.prod_df = pd.DataFrame([{c: (False if c=="選取" else 0) for c in DEFAULT_PROD_COLS}], columns=DEFAULT_PROD_COLS)
-            st.session_state.prod_current_tpl = ""
-        st.success("已清除")
-        st.rerun()
 
 # ----------------------------
 # UI：表格（data_editor）
@@ -677,7 +680,7 @@ def render_left():
 
 def render_right():
     st.markdown("<div class='section-title'>2. 商品清單</div>", unsafe_allow_html=True)
-    template_block("prod", "商品模板", SHEET_PROD, "prod_current_tpl", "prod", show_clear=False)
+    template_block("prod", "商品模板", SHEET_PROD, "prod_current_tpl", "prod")
     prod_now = render_prod_table()
     return prod_now
 
