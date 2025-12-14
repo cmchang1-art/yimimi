@@ -401,11 +401,11 @@ st.session_state.layout_mode = layout_mode
 # ----------------------------
 # UI：模板控制（按你要求「不要亂拆」→ 三欄固定排版）
 # ----------------------------
-def template_block(prefix: str, title: str, sheet: str, current_name_key: str, table_kind: str) -> None:
+def template_block(prefix: str, title: str, sheet: str, current_name_key: str, table_kind: str, show_clear: bool = True) -> None:
     st.markdown(f"<div class='section-title'>{title}（載入 / 儲存 / 刪除）</div>", unsafe_allow_html=True)
 
     if not _gas_enabled():
-        st.info("尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能會停用。")
+        st.info("尚未設定 Streamlit Secrets（GAS_URL/GAS_TOKEN 或 GS_WEBAPP_URL/GS_TOKEN）。模板功能會停用。")
         return
 
     names = ["(無)"] + gas_list(sheet)
@@ -423,7 +423,11 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
         st.write("")
         load_btn = st.button("⬇️ 載入模板", key=f"{prefix}_btn_load", use_container_width=True)
         save_btn = st.button("💾 儲存模板", key=f"{prefix}_btn_save", use_container_width=True)
-        clear_btn = st.button("🧹 清除全部", key=f"{prefix}_btn_clear", use_container_width=True)
+        clear_btn = None
+        if show_clear:
+            clear_btn = None
+        if show_clear:
+            clear_btn = st.button("🧹 清除全部", key=f"{prefix}_btn_clear", use_container_width=True)
 
     with c3:
         del_sel = st.selectbox("要刪除的模板", names, key=f"{prefix}_tpl_del")
@@ -673,7 +677,7 @@ def render_left():
 
 def render_right():
     st.markdown("<div class='section-title'>2. 商品清單</div>", unsafe_allow_html=True)
-    template_block("prod", "商品模板", SHEET_PROD, "prod_current_tpl", "prod")
+    template_block("prod", "商品模板", SHEET_PROD, "prod_current_tpl", "prod", show_clear=False)
     prod_now = render_prod_table()
     return prod_now
 
