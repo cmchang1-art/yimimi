@@ -11,7 +11,6 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
-from decimal import Decimal
 
 import pandas as pd
 import streamlit as st
@@ -220,7 +219,9 @@ class PackedResult:
 
 
 def _volume(l: float, w: float, h: float) -> float:
-    return max(l, 0) * max(w, 0) * max(h, 0)
+    # data_editor 可能回傳 Decimal，統一轉 float 避免 Decimal/float 運算錯誤
+    lf = _to_float(l); wf = _to_float(w); hf = _to_float(h)
+    return max(lf, 0.0) * max(wf, 0.0) * max(hf, 0.0)
 
 
 def try_pack_once(bin_dims: Tuple[float, float, float], items: List[Tuple[str, float, float, float, float]], order: str) -> PackedResult:
@@ -228,11 +229,8 @@ def try_pack_once(bin_dims: Tuple[float, float, float], items: List[Tuple[str, f
         raise RuntimeError("py3dbp 未安裝或匯入失敗，請確認 requirements.txt")
 
     L, W, H = bin_dims
-    # py3dbp 內部會使用 Decimal 進行計算；部分版本若輸入 float，可能產生 Decimal/float 混算錯誤
-    # 這裡統一用 Decimal(str()) 傳入，避免「unsupported operand type(s) for /: 'decimal.Decimal' and 'float'」
-    D = lambda v: Decimal(str(float(v)))
     packer = Packer()
-    packer.add_bin(Bin("box", D(L), D(W), D(H), D(999999)))
+    packer.add_bin(Bin("box", L, W, H, 999999))
 
     def key_volume(x): return _volume(x[1], x[2], x[3])
     def key_maxedge(x): return max(x[1], x[2], x[3])
@@ -248,16 +246,15 @@ def try_pack_once(bin_dims: Tuple[float, float, float], items: List[Tuple[str, f
         items2 = items[:]
 
     for (name, l, w, h, weight) in items2:
-        packer.add_item(Item(name, D(l), D(w), D(h), D(weight)))
+        packer.add_item(Item(name, l, w, h, weight))
 
     packer.pack()
     b = packer.bins[0]
     fitted = b.items
     unfitted = b.unfitted_items
 
-    fitted_vol = sum(_volume(float(i.width), float(i.height), float(i.depth)) for i in fitted)
-    box_vol = _volume(float(L), float(W), float(H))
-    util = (fitted_vol / box_vol) if box_vol > 0 else 0.0
+    fitted_vol = sum(_volume(i.width, i.height, i.depth) for i in fitted)
+    util = fitted_vol / _volume(L, W, H) if _volume(L, W, H) > 0 else 0.0
     return PackedResult(fitted_items=fitted, unfitted_items=unfitted, bin=b, utilization=util)
 
 
@@ -301,18 +298,8 @@ def make_plotly_3d(bin_dims: Tuple[float, float, float], packed: PackedResult) -
         ))
 
     for idx, it in enumerate(packed.fitted_items):
-        # py3dbp 可能回傳 Decimal，Plotly 需 float
-        x0, y0, z0 = [float(v) for v in it.position]
-        add_box(
-            x0,
-            y0,
-            z0,
-            float(it.width),
-            float(it.height),
-            float(it.depth),
-            PALETTE[idx % len(PALETTE)],
-            str(it.name),
-        )
+        x0, y0, z0 = ( _to_float(it.position[0]), _to_float(it.position[1]), _to_float(it.position[2]) )
+        add_box(x0, y0, z0, _to_float(it.width), _to_float(it.height), _to_float(it.depth), PALETTE[idx % len(PALETTE)], it.name)
 
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
@@ -425,8 +412,7 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
 
     names = ["(無)"] + gas_list(sheet)
 
-    # 版型功能區：左(選擇/命名)｜中(載入/儲存)｜右(刪除)
-    c1, c2, c3 = st.columns([2.4, 1.6, 2.4], gap="small")
+    c1, c2, c3 = st.columns([1.2, 1.2, 1.2], gap="small")
 
     with c1:
         sel = st.selectbox("選擇模板", names, key=f"{prefix}_tpl_sel")
@@ -439,6 +425,7 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
         st.write("")
         load_btn = st.button("⬇️ 載入模板", key=f"{prefix}_btn_load", use_container_width=True)
         save_btn = st.button("💾 儲存模板", key=f"{prefix}_btn_save", use_container_width=True)
+        overwrite_same = st.checkbox("覆蓋同名", value=False, key=f"{prefix}_overwrite")
 
     with c3:
         del_sel = st.selectbox("要刪除的模板", names, key=f"{prefix}_tpl_del")
@@ -451,13 +438,11 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
                 st.error("載入失敗：找不到模板或雲端連線問題")
             else:
                 try:
-                    data = json.loads(payload) if payload else []
-                    # 兼容兩種格式：舊版可能直接存 list；新版存 {"rows": [...]} 
-                    rows = data.get("rows", data.get("data", [])) if isinstance(data, dict) else data
+                    data = json.loads(payload) if payload else {}
                     if table_kind == "box":
-                        st.session_state.box_df = norm_box_df(rows)
+                        st.session_state.box_df = norm_box_df(data.get("rows", []))
                     else:
-                        st.session_state.prod_df = norm_prod_df(rows)
+                        st.session_state.prod_df = norm_prod_df(data.get("rows", []))
                     st.session_state[current_name_key] = sel
                     st.success(f"已載入：{sel}")
                     st.cache_data.clear()
@@ -472,7 +457,12 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
         if not name:
             st.warning("請輸入要儲存的模板名稱")
         else:
-            rows = (st.session_state.box_df if table_kind == "box" else st.session_state.prod_df).to_dict(orient="records")
+            # 同名檢查（避免不小心覆蓋）
+            existing = set(tpl_items)
+            if name in existing and not overwrite_same:
+                st.error("同名模板已存在，請更換名稱或勾選「覆蓋同名」")
+            else:
+                rows = (st.session_state.box_df if table_kind == "box" else st.session_state.prod_df).to_dict(orient="records")
             payload = json.dumps({"rows": rows}, ensure_ascii=False)
             res = gas_upsert(sheet, name, payload)
             if res.get("ok"):
@@ -496,210 +486,3 @@ def template_block(prefix: str, title: str, sheet: str, current_name_key: str, t
                 st.error(f"刪除失敗：{res.get('error','請確認雲端連線 / 權限')}")
         else:
             st.warning("請先選擇要刪除的模板")
-
-# ----------------------------
-# UI：表格（data_editor）
-# ----------------------------
-def render_box_table() -> pd.DataFrame:
-    st.markdown("<div class='section-title'>箱型表格（勾選=參與計算；勾選後可刪除）</div>", unsafe_allow_html=True)
-    st.caption("只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。")
-
-    edited = st.data_editor(
-        st.session_state.box_df,
-        key="box_editor",
-        hide_index=True,
-        use_container_width=True,
-        height=360,
-        column_config={
-            "選取": st.column_config.CheckboxColumn("選取", help="勾選=參與計算 / 可用於刪除"),
-            "長": st.column_config.NumberColumn("長", step=0.1, format="%.2f"),
-            "寬": st.column_config.NumberColumn("寬", step=0.1, format="%.2f"),
-            "高": st.column_config.NumberColumn("高", step=0.1, format="%.2f"),
-            "空箱重量": st.column_config.NumberColumn("空箱重量", step=0.01, format="%.2f"),
-            "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
-        },
-    )
-    edited = norm_box_df(edited)
-
-    b1, b2 = st.columns([1,1], gap="small")
-    with b1:
-        if st.button("✅ 套用變更（外箱表格）", key="box_apply_btn", use_container_width=True):
-            st.session_state.box_df = edited
-            st.success("已套用外箱表格")
-            st.rerun()
-    with b2:
-        if st.button("🗑️ 刪除勾選", key="box_del_selected_btn", use_container_width=True):
-            kept = edited[~edited["選取"]].copy()
-            if kept.empty:
-                kept = pd.DataFrame([{c: (False if c=="選取" else 0) for c in DEFAULT_BOX_COLS}], columns=DEFAULT_BOX_COLS)
-            st.session_state.box_df = kept
-            st.success("已刪除勾選列")
-            st.rerun()
-
-    return edited
-
-
-def render_prod_table() -> pd.DataFrame:
-    st.markdown("<div class='section-title'>商品表格（勾選=參與計算；勾選後可刪除）</div>", unsafe_allow_html=True)
-    st.caption("只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。")
-
-    edited = st.data_editor(
-        st.session_state.prod_df,
-        key="prod_editor",
-        hide_index=True,
-        use_container_width=True,
-        height=360,
-        column_config={
-            "選取": st.column_config.CheckboxColumn("選取", help="勾選=參與計算 / 可用於刪除"),
-            "長": st.column_config.NumberColumn("長", step=0.1, format="%.2f"),
-            "寬": st.column_config.NumberColumn("寬", step=0.1, format="%.2f"),
-            "高": st.column_config.NumberColumn("高", step=0.1, format="%.2f"),
-            "重量(kg)": st.column_config.NumberColumn("重量(kg)", step=0.01, format="%.2f"),
-            "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
-        },
-    )
-    edited = norm_prod_df(edited)
-
-    c1, c2, c3 = st.columns([1,1,1], gap="small")
-    with c1:
-        if st.button("✅ 套用變更（商品表格）", key="prod_apply_btn", use_container_width=True):
-            st.session_state.prod_df = edited
-            st.success("已套用商品表格")
-            st.rerun()
-    with c2:
-        if st.button("🗑️ 刪除勾選", key="prod_del_selected_btn", use_container_width=True):
-            kept = edited[~edited["選取"]].copy()
-            if kept.empty:
-                kept = pd.DataFrame([{c: (False if c=="選取" else 0) for c in DEFAULT_PROD_COLS}], columns=DEFAULT_PROD_COLS)
-            st.session_state.prod_df = kept
-            st.success("已刪除勾選列")
-            st.rerun()
-    with c3:
-        if st.button("🧹 清除全部商品", key="prod_clear_all_btn", use_container_width=True):
-            st.session_state.prod_df = pd.DataFrame([{c: (False if c=="選取" else 0) for c in DEFAULT_PROD_COLS}], columns=DEFAULT_PROD_COLS)
-            st.session_state.prod_current_tpl = ""
-            st.success("已清除全部商品")
-            st.rerun()
-
-    return edited
-
-# ----------------------------
-# 訂單
-# ----------------------------
-def render_order_header(prefix: str) -> str:
-    st.markdown("<div class='section-title'>1. 訂單與外箱</div>", unsafe_allow_html=True)
-    order_name = st.text_input("訂單名稱", value=f"訂單_{datetime.now().strftime('%Y%m%d')}", key=f"{prefix}_order_name")
-    return order_name
-
-# ----------------------------
-# 裝箱計算與輸出
-# ----------------------------
-def run_packing(order_name: str, box_df_now: pd.DataFrame, prod_df_now: pd.DataFrame):
-    box_df_now = norm_box_df(box_df_now)
-    prod_df_now = norm_prod_df(prod_df_now)
-
-    # ✅ 外箱：勾選 + 數量>0
-    boxes = box_df_now[(box_df_now["選取"] == True) & (box_df_now["數量"] > 0)].copy()
-
-    # ✅ 商品：勾選 + 數量>0
-    prods = prod_df_now[(prod_df_now["選取"] == True) & (prod_df_now["數量"] > 0)].copy()
-
-    if boxes.empty:
-        st.error("請至少勾選 1 個外箱（且數量 > 0）")
-        return
-    if prods.empty:
-        st.error("請至少勾選 1 個商品（且數量 > 0）")
-        return
-
-    # 目前先用第一個勾選外箱（你可之後再擴充多箱）
-    box_row = boxes.iloc[0]
-    box_dims = (float(box_row["長"]), float(box_row["寬"]), float(box_row["高"]))
-    box_weight = float(box_row["空箱重量"])
-
-    # 展開商品成單件
-    items: List[Tuple[str, float, float, float, float]] = []
-    for _, r in prods.iterrows():
-        name = str(r["商品名稱"]).strip() or "商品"
-        l, w, h = float(r["長"]), float(r["寬"]), float(r["高"])
-        wt = float(r["重量(kg)"])
-        qty = int(r["數量"])
-        for _i in range(qty):
-            items.append((name, l, w, h, wt))
-
-    with st.spinner("正在計算並生成 3D 模擬..."):
-        try:
-            packed = best_pack(box_dims, items)
-            fig = make_plotly_3d(box_dims, packed)
-        except Exception as e:
-            st.error(str(e))
-            return
-
-    st.markdown("<div class='section-title'>3. 裝箱結果與模擬</div>", unsafe_allow_html=True)
-
-    content_weight = float((prods["重量(kg)"] * prods["數量"]).sum())
-    total_weight = content_weight + box_weight
-
-    st.markdown(
-        f"""
-<div class="card">
-<b>訂單：</b>{order_name}<br/>
-<b>使用外箱：</b>{box_row['名稱']}（{box_dims[0]}×{box_dims[1]}×{box_dims[2]}）× 1 箱<br/>
-<b>內容淨重：</b>{content_weight:.2f} kg<br/>
-<b>本次總重：</b>{total_weight:.2f} kg<br/>
-<b>空間利用率：</b>{packed.utilization*100:.2f}%<br/>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-    if packed.unfitted_items:
-        st.warning(f"注意：有部分商品裝不下！未裝入：{len(packed.unfitted_items)} 個")
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    fname, html = build_report_html(order_name, box_dims, box_weight, prods, packed, fig)
-    st.download_button(
-        "⬇️ 下載完整裝箱報告（.html）",
-        data=html.encode("utf-8"),
-        file_name=fname,
-        mime="text/html",
-        key="download_report_btn",
-        use_container_width=True,
-    )
-
-
-# ----------------------------
-# 版面渲染
-# ----------------------------
-def render_left():
-    order_name = render_order_header("left")
-    template_block("box", "箱型模板", SHEET_BOX, "box_current_tpl", "box")
-    box_now = render_box_table()
-    return order_name, box_now
-
-
-def render_right():
-    st.markdown("<div class='section-title'>2. 商品清單</div>", unsafe_allow_html=True)
-    template_block("prod", "商品模板", SHEET_PROD, "prod_current_tpl", "prod")
-    prod_now = render_prod_table()
-    return prod_now
-
-
-def render_bottom(order_name: str, box_now: pd.DataFrame, prod_now: pd.DataFrame):
-    st.markdown("---")
-    if st.button("🚀 開始計算與 3D 模擬", key="run_pack_btn", use_container_width=True):
-        run_packing(order_name, box_now, prod_now)
-
-
-if st.session_state.layout_mode == "左右 50% / 50%":
-    colA, colB = st.columns(2, gap="large")
-    with colA:
-        order_name, box_now = render_left()
-    with colB:
-        prod_now = render_right()
-    render_bottom(order_name, box_now, prod_now)
-else:
-    order_name, box_now = render_left()
-    st.markdown("---")
-    prod_now = render_right()
-    render_bottom(order_name, box_now, prod_now)
