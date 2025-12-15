@@ -60,8 +60,14 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 
 
 #------A004：通用工具函式(含全頁防呆/待處理動作)(開始)：------
+from datetime import datetime, timedelta
+
+def _now_tw():
+    """回傳台灣時間（UTC+8）"""
+    return datetime.utcnow() + timedelta(hours=8)
+
 def _to_float(x, default=0.0) -> float:
-    """給 _sanitize_box/_sanitize_prod 用：把各種輸入安全轉 float"""
+    """給 _sanitize_box / _sanitize_prod 用：把各種輸入安全轉 float"""
     try:
         if x is None:
             return float(default)
