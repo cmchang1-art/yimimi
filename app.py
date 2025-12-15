@@ -273,10 +273,10 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
     with c1:
         sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
         load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
-
-    with c3:
+    with c2:
         del_sel=st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel')
         del_btn=st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
+    with c3:
         new_name=st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
         save_btn=st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
     
