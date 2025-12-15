@@ -272,7 +272,6 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
     c1,c2,c3=st.columns([1.25,1,1.25],gap='medium')
     with c1:
         sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
-    with c2:
         load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
         
     with c3:
@@ -280,6 +279,7 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         del_btn=st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
     new_name=st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
     save_btn=st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
+    
     st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
 
     if load_btn:
