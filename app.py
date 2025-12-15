@@ -623,8 +623,7 @@ def result_block():
         st.error(res.get('error','計算失敗'))
         return
 
-
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
+    box=res['box']
     st.markdown('<div class="soft-title">裝箱結果</div>', unsafe_allow_html=True)
     st.write(f"訂單：{st.session_state.order_name}")
     st.write(f"使用外箱：{box['name']}（{box['l']}×{box['w']}×{box['h']}）× 1 箱")
