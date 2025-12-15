@@ -431,7 +431,6 @@ def box_table_block():
 
     df = _sanitize_box(st.session_state.df_box)
 
-    # 用 form 確保：按一次就執行、且拿到的是 data_editor 回傳的 DataFrame（不是 session_state dict）
     with st.form(key="box_form", clear_on_submit=False):
         edited = st.data_editor(
             df,
@@ -451,6 +450,9 @@ def box_table_block():
             }
         )
 
+        # ✅ 關鍵：每次渲染就保存「畫面上的真實 DataFrame」
+        st.session_state['_box_live_df'] = edited.copy()
+
         b1, b2, b3 = st.columns([1,1,1], gap='medium')
         with b1:
             apply_btn = st.form_submit_button('✅ 套用變更（外箱表格）', use_container_width=True)
@@ -459,12 +461,10 @@ def box_table_block():
         with b3:
             clear_btn = st.form_submit_button('🧹 清除全部外箱', use_container_width=True)
 
-    # --- 按鈕行為（注意：edited 這裡一定是 DataFrame） ---
     if apply_btn:
         clean = _sanitize_box(edited)
         st.session_state.df_box = clean
 
-        # 若已套用某個模板，套用變更就同步覆寫回資料庫
         if gas.ready and (st.session_state.get('active_box_tpl') or '').strip():
             tpl = st.session_state['active_box_tpl']
             ok, msg = gas.upsert(SHEET_BOX, tpl, _box_payload(clean))
@@ -485,12 +485,13 @@ def box_table_block():
         _force_rerun()
 
     if clear_btn:
-        # 真正清空（不回填預設值）+ 清除套用狀態
         st.session_state.df_box = pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
         st.session_state.active_box_tpl = ''
+        st.session_state['_box_live_df'] = st.session_state.df_box.copy()
         st.success('已清空全部外箱，並清除「目前套用」狀態')
         _force_rerun()
 #------A011：外箱表格 UI（Data Editor + 操作按鈕）(結束)：------
+
 
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(開始)：------
 def prod_table_block():
@@ -517,6 +518,9 @@ def prod_table_block():
                 '數量': st.column_config.NumberColumn('數量', step=1)
             }
         )
+
+        # ✅ 關鍵：每次渲染就保存「畫面上的真實 DataFrame」
+        st.session_state['_prod_live_df'] = edited.copy()
 
         b1, b2, b3 = st.columns([1,1,1], gap='medium')
         with b1:
@@ -552,6 +556,7 @@ def prod_table_block():
     if clear_btn:
         st.session_state.df_prod = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
         st.session_state.active_prod_tpl = ''
+        st.session_state['_prod_live_df'] = st.session_state.df_prod.copy()
         st.success('已清空全部商品，並清除「目前套用」狀態')
         _force_rerun()
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(結束)：------
@@ -560,36 +565,49 @@ def prod_table_block():
 
 
 #------A013：外箱選擇/商品展開為 Item(開始)：------
-def _choose_box(df_box:pd.DataFrame)->Optional[Dict[str,Any]]:
+def _build_bins(df_box: pd.DataFrame) -> List[Dict[str,Any]]:
+    """
+    回傳所有勾選且數量>0的箱子，並展開數量（qty=3 就會產生 3 個 bin 設定）。
+    """
+    bins=[]
     for _,r in df_box.iterrows():
-        if not bool(r['選取']): 
+        if not bool(r.get('選取', False)):
             continue
-        if int(r['數量'])<=0: 
+        qty=int(r.get('數量', 0) or 0)
+        if qty<=0:
             continue
-        if r['長']<=0 or r['寬']<=0 or r['高']<=0: 
+        L=float(r.get('長',0) or 0)
+        W=float(r.get('寬',0) or 0)
+        H=float(r.get('高',0) or 0)
+        if L<=0 or W<=0 or H<=0:
             continue
-        return {
-            'name':r['名稱'] or '外箱',
-            'l':float(r['長']),
-            'w':float(r['寬']),
-            'h':float(r['高']),
-            'tare':float(r['空箱重量'])
-        }
-    return None
+
+        name=str(r.get('名稱','') or '外箱').strip() or '外箱'
+        tare=float(r.get('空箱重量',0) or 0)
+
+        for i in range(qty):
+            bins.append({'name':name, 'l':L, 'w':W, 'h':H, 'tare':tare})
+    return bins
 
 def _build_items(df_prod:pd.DataFrame)->List[Item]:
     items=[]
     for _,r in df_prod.iterrows():
-        if not bool(r['選取']): 
+        if not bool(r.get('選取', False)):
             continue
-        qty=int(r['數量'])
-        if qty<=0: 
+        qty=int(r.get('數量', 0) or 0)
+        if qty<=0:
             continue
-        if r['長']<=0 or r['寬']<=0 or r['高']<=0: 
+        L=float(r.get('長',0) or 0)
+        W=float(r.get('寬',0) or 0)
+        H=float(r.get('高',0) or 0)
+        if L<=0 or W<=0 or H<=0:
             continue
-        nm=r['商品名稱'] or '商品'
+
+        nm=str(r.get('商品名稱','') or '商品').strip() or '商品'
+        wt=float(r.get('重量(kg)',0) or 0)
+
         for i in range(qty):
-            items.append(Item(f"{nm}_{i+1}", float(r['長']), float(r['寬']), float(r['高']), float(r['重量(kg)'])))
+            items.append(Item(f"{nm}_{i+1}", L, W, H, wt))
     return items
 #------A013：外箱選擇/商品展開為 Item(結束)：------
 
@@ -686,46 +704,124 @@ def build_report_html(
 
 #------A016：裝箱計算核心（py3dbp）+ 統計(開始)：------
 def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->Dict[str,Any]:
-    box=_choose_box(df_box)
-    if not box: 
-        return {'ok':False,'error':'請至少勾選 1 個外箱（且數量>0）'}
+    bins=_build_bins(df_box)
+    if not bins:
+        return {'ok':False,'error':'請至少勾選 1 個外箱（且數量>0、尺寸>0）'}
+
     items=_build_items(df_prod)
-    if not items: 
+    if not items:
         return {'ok':False,'error':'請至少勾選 1 個商品（且數量>0、尺寸>0）'}
 
     packer=Packer()
-    packer.add_bin(Bin(box['name'], box['l'], box['w'], box['h'], 999999))
-    for it in items: 
+
+    # 加入所有外箱（多箱/多箱型）
+    for i,b in enumerate(bins, start=1):
+        packer.add_bin(Bin(f"{b['name']}#{i}", b['l'], b['w'], b['h'], 999999))
+
+    for it in items:
         packer.add_item(it)
-    try: 
-        packer.pack(bigger_first=True, distribute_items=False)
-    except TypeError: 
+
+    try:
+        packer.pack(bigger_first=True, distribute_items=True)
+    except TypeError:
         packer.pack()
 
-    b0=packer.bins[0]
-    fitted=list(getattr(b0,'items',[]) or [])
-    unfitted=list(getattr(b0,'unfitted_items',[]) or [])
+    # 整理每個 bin 的結果
+    per_bins=[]
+    all_fitted=[]
+    all_unfitted=[]
+    for b0 in packer.bins:
+        fitted=list(getattr(b0,'items',[]) or [])
+        unfitted=list(getattr(b0,'unfitted_items',[]) or [])
 
-    content_wt=sum(_to_float(getattr(it,'weight',0)) for it in fitted)
-    total_wt=content_wt+_to_float(box.get('tare',0))
+        # b0.name 會是 "箱名#序號"
+        # 找回原箱尺寸/重量：用 b0 的 dimension 與 bins 的順序對應（安全起見用 index）
+        per_bins.append({
+            'bin_name': b0.name,
+            'L': float(getattr(b0,'width', 0) or 0),   # 注意：py3dbp 命名有時互換，後面 fig 用 bins 展開資料更可靠
+            'W': float(getattr(b0,'height', 0) or 0),
+            'H': float(getattr(b0,'depth', 0) or 0),
+            'fitted': fitted,
+            'unfitted': unfitted,
+        })
 
-    used_vol=sum(_to_float(it.width)*_to_float(it.height)*_to_float(it.depth) for it in fitted)
-    box_vol=float(box['l']*box['w']*box['h'])
-    util=(used_vol/box_vol*100.0) if box_vol>0 else 0.0
+        all_fitted.extend(fitted)
+        # 只有最後一個 bin 的 unfitted_items 才是真正裝不下的（py3dbp 通常放在最後 bin）
+        # 但保險起見：把每個 bin 的 unfitted 都收集起來，最後再去重
+        all_unfitted.extend(unfitted)
 
-    fig=build_3d_fig(box,fitted)
-    html=build_report_html(order_name,box,fitted,unfitted,content_wt,total_wt,util,fig)
+    # 去重（避免重複）
+    seen=set()
+    uniq_unfitted=[]
+    for it in all_unfitted:
+        k=str(getattr(it,'name',''))
+        if k in seen: 
+            continue
+        seen.add(k)
+        uniq_unfitted.append(it)
+
+    # 統計重量
+    content_wt=sum(_to_float(getattr(it,'weight',0)) for it in all_fitted)
+
+    # 本次總重 = 內容淨重 + 「實際有裝到商品的箱子」空箱重
+    used_bin_count=0
+    tare_total=0.0
+    # bins[] 展開順序與 packer.bins 一致
+    for i,b0 in enumerate(packer.bins):
+        fitted=list(getattr(b0,'items',[]) or [])
+        if fitted:
+            used_bin_count += 1
+            tare_total += _to_float(bins[i].get('tare',0))
+
+    total_wt=content_wt+tare_total
+
+    # 空間利用率（以「實際用到的箱子總體積」為分母）
+    used_vol=sum(_to_float(it.width)*_to_float(it.height)*_to_float(it.depth) for it in all_fitted)
+    used_box_vol=0.0
+    used_bins_meta=[]
+    for i,b0 in enumerate(packer.bins):
+        fitted=list(getattr(b0,'items',[]) or [])
+        if not fitted:
+            continue
+        bb=bins[i]
+        used_box_vol += float(bb['l']*bb['w']*bb['h'])
+        used_bins_meta.append(bb)
+
+    util=(used_vol/used_box_vol*100.0) if used_box_vol>0 else 0.0
+
+    # 3D：先預設顯示第一個「有裝到商品」的箱子
+    fig=None
+    first_used_index=None
+    for i,b0 in enumerate(packer.bins):
+        if list(getattr(b0,'items',[]) or []):
+            first_used_index=i
+            break
+
+    if first_used_index is not None:
+        box_meta=used_bins_meta[0] if used_bins_meta else bins[first_used_index]
+        fitted=list(getattr(packer.bins[first_used_index],'items',[]) or [])
+        fig=build_3d_fig(box_meta,fitted)
+    else:
+        # 全部都沒裝到（理論上不會發生，除非 items 全部裝不下）
+        fig=go.Figure()
+
+    # 報告 html：仍以第一個使用的箱子做 3D 展示（UI 會提供切換）
+    html=build_report_html(order_name, (used_bins_meta[0] if used_bins_meta else bins[0]),
+                           (list(getattr(packer.bins[first_used_index],'items',[]) or []) if first_used_index is not None else []),
+                           uniq_unfitted, content_wt, total_wt, util, fig)
 
     return {
         'ok':True,
-        'box':box,
-        'fitted':fitted,
-        'unfitted':unfitted,
-        'content_wt':content_wt,
-        'total_wt':total_wt,
-        'util':util,
-        'fig':fig,
-        'report_html':html
+        'bins_input': bins,             # 你選的所有箱子（展開後）
+        'packer_bins': packer.bins,     # py3dbp 的 bins（含 items）
+        'used_bin_count': used_bin_count,
+        'fitted_all': all_fitted,
+        'unfitted': uniq_unfitted,
+        'content_wt': content_wt,
+        'total_wt': total_wt,
+        'util': util,
+        'fig': fig,
+        'report_html': html
     }
 #------A016：裝箱計算核心（py3dbp）+ 統計(結束)：------
 
@@ -744,23 +840,9 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
-        # ✅ 這裡是關鍵：把「畫面上勾選/修改」從 editor state 套回 df，再進行計算
-        df_box_src = st.session_state.df_box
-        df_prod_src = st.session_state.df_prod
-
-        be = st.session_state.get('box_editor', None)
-        pe = st.session_state.get('prod_editor', None)
-
-        # data_editor 可能是 DataFrame（少見）或 dict（常見）
-        if isinstance(be, pd.DataFrame):
-            df_box_src = be
-        elif isinstance(be, dict):
-            df_box_src = _apply_editor_state(df_box_src, be)
-
-        if isinstance(pe, pd.DataFrame):
-            df_prod_src = pe
-        elif isinstance(pe, dict):
-            df_prod_src = _apply_editor_state(df_prod_src, pe)
+        # ✅ 以「畫面上的真實資料」為準（不需要按套用變更）
+        df_box_src = st.session_state.get('_box_live_df', st.session_state.df_box)
+        df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
 
         st.session_state.df_box = _sanitize_box(df_box_src)
         st.session_state.df_prod = _sanitize_prod(df_prod_src)
@@ -781,25 +863,52 @@ def result_block():
         st.error(res.get('error','計算失敗'))
         return
 
-    box = res['box']
-    st.markdown('<div class="soft-title">裝箱結果</div>', unsafe_allow_html=True)
-    st.write(f"訂單：{st.session_state.order_name}")
-    st.write(f"使用外箱：{box['name']}（{box['l']}×{box['w']}×{box['h']}）× 1 箱")
-    st.write(f"內容淨重：{res['content_wt']:.2f} kg")
-    st.write(f"本次總重：{res['total_wt']:.2f} kg")
-    st.write(f"空間利用率：{res['util']:.2f}%")
+    # ===== 報告式 UI =====
+    st.markdown("### 🧾 訂單裝箱報告")
+    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
+
+    used_bin_count = int(res.get('used_bin_count', 0))
+    st.markdown(
+        f"""
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div>🧾 <b>訂單名稱</b>　<span style="color:#1f6feb;font-weight:800">{st.session_state.order_name}</span></div>
+          <div>🕒 <b>計算時間</b>　{_now_tw().strftime('%Y-%m-%d %H:%M:%S (台灣時間)')}</div>
+          <div>📦 <b>使用箱數</b>　<b>{used_bin_count}</b> 箱（可混用不同箱型）</div>
+          <div>⚖️ <b>內容淨重</b>　{res['content_wt']:.2f} kg</div>
+          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{res['total_wt']:.2f} kg</span></div>
+          <div>📊 <b>整體空間利用率</b>　{res['util']:.2f}%（以實際用到的箱子總體積計算）</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     if res['unfitted']:
         counts={}
         for it in res['unfitted']:
             base=str(it.name).split('_')[0]
             counts[base]=counts.get(base,0)+1
-        st.warning('注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）')
+
+        st.markdown(
+            """
+            <div style="margin-top:12px;border:1px solid #f2b8b5;background:#fdecea;padding:10px 12px;border-radius:10px">
+              ❌ <b>注意：</b>有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
         for k,v in counts.items():
-            st.error(f"{k}：超過 {v} 個")
+            st.markdown(
+                f"""
+                <div style="margin-top:8px;border:1px solid #f2b8b5;background:#fdecea;padding:8px 12px;border-radius:10px">
+                  ⚠️ <b>{k}</b>：超過 <b>{v}</b> 個
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    st.plotly_chart(res['fig'], use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    # 下載
     ts=_now_tw().strftime('%Y%m%d_%H%M')
     fname=f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
     st.download_button(
@@ -810,6 +919,30 @@ def result_block():
         use_container_width=True,
         key='dl_report'
     )
+
+    # ===== 3D：提供切換要看的箱子 =====
+    packer_bins = res.get('packer_bins') or []
+    bins_input = res.get('bins_input') or []
+
+    used_indices=[]
+    labels=[]
+    for i,b0 in enumerate(packer_bins):
+        fitted=list(getattr(b0,'items',[]) or [])
+        if not fitted:
+            continue
+        used_indices.append(i)
+        labels.append(f"{b0.name}（裝入 {len(fitted)} 件）")
+
+    if used_indices:
+        sel = st.selectbox("選擇要查看的箱子 3D 模擬", labels, index=0, key="sel_bin_3d")
+        idx = used_indices[labels.index(sel)]
+
+        box_meta = bins_input[idx]
+        fitted = list(getattr(packer_bins[idx],'items',[]) or [])
+        fig = build_3d_fig(box_meta, fitted)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("本次沒有任何箱子成功裝入商品（可能全部商品尺寸不合）。")
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
