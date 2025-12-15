@@ -55,7 +55,18 @@ def _safe_name(s:str)->str:
     s=(s or '').strip() or '訂單'
     s=re.sub(r'[\\/:*?"<>| ]+','_',s)
     return s[:60]
+
+def _force_rerun():
+    # Streamlit 新版：st.rerun；舊版：st.experimental_rerun
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
 #------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
+
 
 
 #------A005：Google Apps Script(GAS) API Client(開始)：------
@@ -106,12 +117,18 @@ class GASClient:
         d=self._call('upsert',sheet,name=name,payload=payload)
         return (True,'已儲存') if d.get('ok') else (False, f"儲存失敗：{d.get('error','未知錯誤')}")
 
+    def upsert(self,sheet:str,name:str,payload:Dict[str,Any])->Tuple[bool,str]:
+        # 覆寫儲存（用於：套用變更後同步回寫雲端模板）
+        d=self._call('upsert',sheet,name=name,payload=payload)
+        return (True,'已更新') if d.get('ok') else (False, f"更新失敗：{d.get('error','未知錯誤')}")
+
     def delete(self,sheet:str,name:str)->Tuple[bool,str]:
         d=self._call('delete',sheet,name=name)
         return (True,'已刪除') if d.get('ok') else (False, f"刪除失敗：{d.get('error','未知錯誤')}")
 
 gas=GASClient(GAS_URL,GAS_TOKEN)
 #------A005：Google Apps Script(GAS) API Client(結束)：------
+
 
 
 #------A006：Session State 預設值初始化(開始)：------
@@ -140,53 +157,69 @@ def _ensure_defaults():
 #------A007：外箱資料清理/防呆(開始)：------
 def _sanitize_box(df:pd.DataFrame)->pd.DataFrame:
     cols=['選取','名稱','長','寬','高','數量','空箱重量']
-    if df is None: 
-        df=pd.DataFrame()
+    if df is None:
+        df=pd.DataFrame(columns=cols)
     df=df.copy()
     for c in cols:
-        if c not in df.columns: 
+        if c not in df.columns:
             df[c]='' if c=='名稱' else 0
     df=df[cols].fillna('')
+
+    # 空表就直接回傳空表（不要強塞預設值）
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
     df['選取']=df['選取'].astype(bool)
     df['名稱']=df['名稱'].astype(str).str.strip()
-    for c in ['長','寬','高','空箱重量']: 
+    for c in ['長','寬','高','空箱重量']:
         df[c]=df[c].apply(_to_float)
     df['數量']=df['數量'].apply(lambda x:int(_to_float(x,0)))
 
-    def empty(r):
+    def empty_row(r):
         return (not r['名稱']) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
 
-    df=df[~df.apply(empty,axis=1)].reset_index(drop=True)
+    df=df[~df.apply(empty_row,axis=1)].reset_index(drop=True)
+
+    # 清理完如果變空，也保持空（不回填預設）
     if df.empty:
-        df=pd.DataFrame([{'選取':True,'名稱':'手動箱','長':35.0,'寬':25.0,'高':20.0,'數量':1,'空箱重量':0.50}])
+        return pd.DataFrame(columns=cols)
+
     return df
 #------A007：外箱資料清理/防呆(結束)：------
+
 
 
 #------A008：商品資料清理/防呆(開始)：------
 def _sanitize_prod(df:pd.DataFrame)->pd.DataFrame:
     cols=['選取','商品名稱','長','寬','高','重量(kg)','數量']
-    if df is None: 
-        df=pd.DataFrame()
+    if df is None:
+        df=pd.DataFrame(columns=cols)
     df=df.copy()
     for c in cols:
-        if c not in df.columns: 
+        if c not in df.columns:
             df[c]='' if c=='商品名稱' else 0
     df=df[cols].fillna('')
+
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
     df['選取']=df['選取'].astype(bool)
     df['商品名稱']=df['商品名稱'].astype(str).str.strip()
-    for c in ['長','寬','高','重量(kg)']: 
+    for c in ['長','寬','高','重量(kg)']:
         df[c]=df[c].apply(_to_float)
     df['數量']=df['數量'].apply(lambda x:int(_to_float(x,0)))
 
-    def empty(r):
+    def empty_row(r):
         return (not r['商品名稱']) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
 
-    df=df[~df.apply(empty,axis=1)].reset_index(drop=True)
+    df=df[~df.apply(empty_row,axis=1)].reset_index(drop=True)
+
     if df.empty:
-        df=pd.DataFrame([{'選取':True,'商品名稱':'禮盒(米餅)','長':21.0,'寬':14.0,'高':8.5,'重量(kg)':0.50,'數量':5}])
+        return pd.DataFrame(columns=cols)
+
     return df
 #------A008：商品資料清理/防呆(結束)：------
+
 
 
 #------A009：外箱/商品 模板 payload 轉換(開始)：------
@@ -269,112 +302,81 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
 
-    # 用版本號 rev 讓 selectbox/輸入框在儲存/刪除後「重新建立」，避免選單卡住不更新
-    rev_key = f"{key_prefix}_rev"
-    if rev_key not in st.session_state:
-        st.session_state[rev_key] = 0
-    rev = int(st.session_state[rev_key])
+    names=['(無)']+sorted(gas.list_names(sheet))
 
-    def _force_rerun():
-        # Streamlit 新版：st.rerun；舊版：st.experimental_rerun
-        try:
-            st.rerun()
-        except Exception:
-            try:
-                st.experimental_rerun()
-            except Exception:
-                pass
-
-    # 每次渲染都重新拉一次名稱清單（但只有 rerun 才會立即看到更新）
-    names = ['(無)'] + sorted(gas.list_names(sheet))
-
-    # 第一排：左右兩欄
-    c1, c2 = st.columns([1, 1], gap='medium')
-    # 第二排：整行容器
-    c3 = st.container()
+    c1,c2=st.columns([1,1],gap='medium')
+    c3=st.container()
 
     with c1:
-        sel = st.selectbox('選擇模板', names, key=f'{key_prefix}_sel_{rev}')
-        load_btn = st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load_{rev}')
+        sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
+        load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
     with c2:
-        del_sel = st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel_{rev}')
-        del_btn = st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del_{rev}')
+        del_sel=st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel')
+        del_btn=st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
     with c3:
-        new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new_{rev}')
-        save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save_{rev}')
+        new_name=st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
+        save_btn=st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
 
-    st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
-
-    # 載入
+    # 先處理動作，再顯示目前套用（這樣才會即時更新）
     if load_btn:
-        if sel == '(無)':
+        if sel=='(無)':
             st.warning('請先選擇要載入的模板')
         else:
-            payload = gas.get_payload(sheet, sel)
+            payload=gas.get_payload(sheet, sel)
             if payload is None:
                 st.error('載入失敗：請確認雲端連線 / 權限')
             else:
                 try:
-                    st.session_state[df_key] = from_payload(payload)
-                    st.session_state[active_key] = sel
+                    st.session_state[df_key]=from_payload(payload)
+                    st.session_state[active_key]=sel
                     st.success(f'已載入：{sel}')
-                    # 載入後不一定要 rerun（你想要立即刷新表格也可 rerun）
+                    _force_rerun()
                 except Exception as e:
                     st.error(f'載入解析失敗：{e}')
 
-    # 儲存（create_only）
     if save_btn:
-        nm = (new_name or '').strip()
+        nm=(new_name or '').strip()
         if not nm:
             st.warning('請先輸入「另存為模板名稱」')
         else:
-            ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
+            ok,msg=gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
             if ok:
-                st.session_state[active_key] = nm
-
-                # 讓下一輪 UI 直接選到新模板
-                st.session_state[rev_key] = rev + 1
-                st.session_state[f'{key_prefix}_sel_{rev+1}'] = nm
-                st.session_state[f'{key_prefix}_del_sel_{rev+1}'] = nm
-
+                st.session_state[active_key]=nm
                 st.success(msg)
                 _force_rerun()
             else:
                 st.error(msg)
 
-    # 刪除
     if del_btn:
-        if del_sel == '(無)':
+        if del_sel=='(無)':
             st.warning('請先選擇要刪除的模板')
         else:
-            ok, msg = gas.delete(sheet, del_sel)
+            ok,msg=gas.delete(sheet, del_sel)
             if ok:
-                if st.session_state.get(active_key) == del_sel:
-                    st.session_state[active_key] = ''
-
-                # 刪除後回到 (無) 並刷新選單
-                st.session_state[rev_key] = rev + 1
-                st.session_state[f'{key_prefix}_sel_{rev+1}'] = '(無)'
-                st.session_state[f'{key_prefix}_del_sel_{rev+1}'] = '(無)'
-
+                if st.session_state.get(active_key)==del_sel:
+                    st.session_state[active_key]=''
                 st.success(msg)
                 _force_rerun()
             else:
                 st.error(msg)
+
+    st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(結束)：------
+
 
 
 #------A011：外箱表格 UI（Data Editor + 操作按鈕）(開始)：------
 def box_table_block():
     st.markdown('### 箱型表格（勾選=參與計算；勾選後可刪除）')
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
+
     df=_sanitize_box(st.session_state.df_box)
     edited=st.data_editor(
-        df, 
-        key='box_editor', 
-        hide_index=True, 
-        num_rows='dynamic', 
-        use_container_width=True, 
+        df,
+        key='box_editor',
+        hide_index=True,
+        num_rows='dynamic',
+        use_container_width=True,
         height=320,
         column_config={
             '選取': st.column_config.CheckboxColumn('選取'),
@@ -386,41 +388,64 @@ def box_table_block():
             '空箱重量': st.column_config.NumberColumn('空箱重量', step=0.01, format='%.2f')
         }
     )
+
+    # 以 session_state 裡的最新 editor 值為準（避免按一次拿到舊資料）
+    current = st.session_state.get('box_editor', edited)
+
     b1,b2,b3=st.columns([1,1,1],gap='medium')
-    with b1: 
+    with b1:
         apply_btn=st.button('✅ 套用變更（外箱表格）', use_container_width=True, key='box_apply')
-    with b2: 
+    with b2:
         del_btn=st.button('🗑️ 刪除勾選', use_container_width=True, key='box_del')
-    with b3: 
+    with b3:
         clear_btn=st.button('🧹 清除全部外箱', use_container_width=True, key='box_clear')
 
     if apply_btn:
-        st.session_state.df_box=_sanitize_box(edited)
-        st.success('已套用外箱表格變更')
+        clean=_sanitize_box(current)
+        st.session_state.df_box=clean
+
+        # 若已套用某個模板，套用變更就同步覆寫回資料庫
+        if gas.ready and (st.session_state.get('active_box_tpl') or '').strip():
+            tpl=st.session_state['active_box_tpl']
+            ok,msg=gas.upsert(SHEET_BOX, tpl, _box_payload(clean))
+            if ok:
+                st.success(f'已套用並同步更新模板：{tpl}')
+            else:
+                st.error(msg)
+        else:
+            st.success('已套用外箱表格變更')
+
+        _force_rerun()
 
     if del_btn:
-        d=_sanitize_box(edited)
+        d=_sanitize_box(current)
         d=d[~d['選取']].reset_index(drop=True)
         st.session_state.df_box=_sanitize_box(d)
         st.success('已刪除勾選外箱')
+        _force_rerun()
 
     if clear_btn:
-        st.session_state.df_box=_sanitize_box(pd.DataFrame())
-        st.success('已清除並重置外箱')
+        # 真正清空（不回填預設值）+ 清除套用狀態
+        st.session_state.df_box=pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
+        st.session_state.active_box_tpl=''
+        st.success('已清空全部外箱，並清除「目前套用」狀態')
+        _force_rerun()
 #------A011：外箱表格 UI（Data Editor + 操作按鈕）(結束)：------
+
 
 
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(開始)：------
 def prod_table_block():
     st.markdown('### 商品表格（勾選=參與計算；勾選後可刪除）')
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
+
     df=_sanitize_prod(st.session_state.df_prod)
     edited=st.data_editor(
-        df, 
-        key='prod_editor', 
-        hide_index=True, 
-        num_rows='dynamic', 
-        use_container_width=True, 
+        df,
+        key='prod_editor',
+        hide_index=True,
+        num_rows='dynamic',
+        use_container_width=True,
         height=320,
         column_config={
             '選取': st.column_config.CheckboxColumn('選取'),
@@ -432,28 +457,47 @@ def prod_table_block():
             '數量': st.column_config.NumberColumn('數量', step=1)
         }
     )
+
+    current = st.session_state.get('prod_editor', edited)
+
     b1,b2,b3=st.columns([1,1,1],gap='medium')
-    with b1: 
+    with b1:
         apply_btn=st.button('✅ 套用變更（商品表格）', use_container_width=True, key='prod_apply')
-    with b2: 
+    with b2:
         del_btn=st.button('🗑️ 刪除勾選', use_container_width=True, key='prod_del')
-    with b3: 
+    with b3:
         clear_btn=st.button('🧹 清除全部商品', use_container_width=True, key='prod_clear')
 
     if apply_btn:
-        st.session_state.df_prod=_sanitize_prod(edited)
-        st.success('已套用商品表格變更')
+        clean=_sanitize_prod(current)
+        st.session_state.df_prod=clean
+
+        if gas.ready and (st.session_state.get('active_prod_tpl') or '').strip():
+            tpl=st.session_state['active_prod_tpl']
+            ok,msg=gas.upsert(SHEET_PROD, tpl, _prod_payload(clean))
+            if ok:
+                st.success(f'已套用並同步更新模板：{tpl}')
+            else:
+                st.error(msg)
+        else:
+            st.success('已套用商品表格變更')
+
+        _force_rerun()
 
     if del_btn:
-        d=_sanitize_prod(edited)
+        d=_sanitize_prod(current)
         d=d[~d['選取']].reset_index(drop=True)
         st.session_state.df_prod=_sanitize_prod(d)
         st.success('已刪除勾選商品')
+        _force_rerun()
 
     if clear_btn:
-        st.session_state.df_prod=_sanitize_prod(pd.DataFrame())
-        st.success('已清除並重置商品')
+        st.session_state.df_prod=pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
+        st.session_state.active_prod_tpl=''
+        st.success('已清空全部商品，並清除「目前套用」狀態')
+        _force_rerun()
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(結束)：------
+
 
 
 #------A013：外箱選擇/商品展開為 Item(開始)：------
