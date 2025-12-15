@@ -57,7 +57,7 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 #------A003：Secrets/環境變數讀取工具(結束)：------
 
 
-#------A004：通用工具函式(整合最終版/避免NameError)(開始)：------
+#------A004：通用工具函式(整合最終版/避免NameError/含GAS快取/真防呆/相容舊流程)(開始)：------
 from datetime import datetime, timedelta
 import re, html
 from typing import Any, Dict, List, Optional
@@ -185,6 +185,36 @@ def _with_fullpage_lock(msg: str, fn):
             pass
         _set_loading(False, '')
 
+# ===== GAS 清單/讀取快取（修正 _cache_gas_list NameError）=====
+@st.cache_data(ttl=20, show_spinner=False)
+def _cache_gas_list(gas_url: str, gas_token: str, sheet: str):
+    """模板清單：快取 20 秒，避免每次 rerun 都打 GAS 很慢"""
+    c = GASClient(gas_url, gas_token)
+    if not getattr(c, 'ready', False):
+        return []
+    try:
+        return c.list_names(sheet) or []
+    except Exception:
+        return []
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _cache_gas_get(gas_url: str, gas_token: str, sheet: str, name: str):
+    """模板內容：快取 20 秒"""
+    c = GASClient(gas_url, gas_token)
+    if not getattr(c, 'ready', False):
+        return None
+    try:
+        return c.get_payload(sheet, name)
+    except Exception:
+        return None
+
+def _gas_cache_clear():
+    """儲存/刪除模板後清快取，讓清單馬上更新"""
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
 # ===== 相容舊版 pending-action（避免 _has_action NameError）=====
 def _queue_action(action: str, sheet: str, name: str, df_key: str, active_key: str):
     st.session_state['_pending_action'] = {
@@ -214,10 +244,17 @@ def _handle_pending_action():
 
     def _do():
         if action == 'load':
-            payload = gas.get_payload(sheet, name)
+            # 若你 template_block 用快取，這邊也用快取取 payload
+            payload = None
+            try:
+                payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, name)
+            except Exception:
+                payload = gas.get_payload(sheet, name)
+
             if payload is None:
                 st.error('載入失敗：請確認雲端連線 / 權限')
                 return
+
             if df_key == 'df_box':
                 df_loaded = _sanitize_box(_box_from(payload))
                 st.session_state.df_box = df_loaded
@@ -228,7 +265,9 @@ def _handle_pending_action():
                 st.session_state.df_prod = df_loaded
                 st.session_state['_prod_live_df'] = df_loaded.copy()
                 st.session_state.pop('prod_editor', None)
+
             st.session_state[active_key] = name
+            _gas_cache_clear()
             st.success(f'已載入：{name}')
 
         elif action == 'save':
@@ -236,8 +275,10 @@ def _handle_pending_action():
                 ok, msg = gas.create_only(sheet, name, _box_payload(st.session_state.df_box))
             else:
                 ok, msg = gas.create_only(sheet, name, _prod_payload(st.session_state.df_prod))
+
             if ok:
                 st.session_state[active_key] = name
+                _gas_cache_clear()
                 st.success(msg)
             else:
                 st.error(msg)
@@ -247,6 +288,7 @@ def _handle_pending_action():
             if ok:
                 if st.session_state.get(active_key) == name:
                     st.session_state[active_key] = ''
+                _gas_cache_clear()
                 st.success(msg)
             else:
                 st.error(msg)
@@ -256,7 +298,7 @@ def _handle_pending_action():
     finally:
         _pop_action()
         _force_rerun()
-#------A004：通用工具函式(整合最終版/避免NameError)(結束)：------
+#------A004：通用工具函式(整合最終版/避免NameError/含GAS快取/真防呆/相容舊流程)(結束)：------
 
 
 
