@@ -20,8 +20,30 @@ st.markdown('''<style>
 .muted{color:#666;font-size:13px}
 .soft-card{border:1px solid #e6e6e6;border-radius:14px;padding:16px;background:#fff}
 .soft-title{font-weight:800;font-size:20px;margin-bottom:10px}
+
+/* ===== Loading overlay (鎖操作) ===== */
+.loading-wrap{position:relative}
+.loading-overlay{
+  position:absolute; inset:0;
+  background:rgba(255,255,255,0.78);
+  border:1px dashed rgba(0,0,0,0.18);
+  border-radius:14px;
+  display:flex; align-items:center; justify-content:center;
+  z-index:50;
+  pointer-events:all;
+}
+.loading-box{
+  background:#fff;
+  border:1px solid rgba(0,0,0,0.15);
+  border-radius:12px;
+  padding:10px 14px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.08);
+  font-weight:800;
+}
+.loading-sub{font-weight:500;color:#555;font-size:13px;margin-top:4px}
 </style>''', unsafe_allow_html=True)
 #------A002：Streamlit頁面設定與全域CSS(結束)：------
+
 
 
 #------A003：Secrets/環境變數讀取工具(開始)：------
@@ -43,9 +65,9 @@ def _to_float(x, default=0.0)->float:
     try:
         return float(x)
     except Exception:
-        try: 
+        try:
             return float(str(x).strip())
-        except Exception: 
+        except Exception:
             return float(default)
 
 def _now_tw()->datetime:
@@ -81,7 +103,6 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
     deleted_rows = state.get("deleted_rows") or []
     added_rows = state.get("added_rows") or []
 
-    # 1) edited_rows: {row_index: {col: value}}
     if isinstance(edited_rows, dict) and not out.empty:
         for ridx, changes in edited_rows.items():
             try:
@@ -95,7 +116,6 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
                     if col in out.columns:
                         out.at[out.index[i], col] = val
 
-    # 2) deleted_rows: [row_index...]
     if isinstance(deleted_rows, list) and not out.empty:
         for ridx in sorted(deleted_rows, reverse=True):
             try:
@@ -106,7 +126,6 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
                 out = out.drop(out.index[i])
         out = out.reset_index(drop=True)
 
-    # 3) added_rows: [{col: val}...]
     if isinstance(added_rows, list):
         for row in added_rows:
             if isinstance(row, dict):
@@ -116,6 +135,51 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
                 out = pd.concat([out, pd.DataFrame([safe_row])], ignore_index=True)
 
     return out
+
+# ===== Loading 控制（全區塊鎖定）=====
+def _is_loading()->bool:
+    return bool(st.session_state.get('_loading', False))
+
+def _set_loading(flag: bool, msg: str = '資料讀取中...'):
+    st.session_state['_loading'] = bool(flag)
+    st.session_state['_loading_msg'] = msg or '資料讀取中...'
+
+def _loading_msg()->str:
+    return str(st.session_state.get('_loading_msg', '資料讀取中...') or '資料讀取中...')
+
+def _loading_overlay_html(msg: str = None) -> str:
+    m = msg or _loading_msg()
+    return f"""
+    <div class="loading-overlay">
+      <div class="loading-box">
+        ⏳ {m}
+        <div class="loading-sub">請稍候，資料處理完成後即可操作</div>
+      </div>
+    </div>
+    """
+
+def _begin_loading(msg: str = '資料讀取中...'):
+    _set_loading(True, msg)
+
+def _end_loading():
+    _set_loading(False, '')
+
+# ===== GAS cache（減少 list/get 的延遲）=====
+@st.cache_data(ttl=20, show_spinner=False)
+def _cache_gas_list(url: str, token: str, sheet: str) -> List[str]:
+    c = GASClient(url, token)
+    return c.list_names(sheet) if c.ready else []
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _cache_gas_get(url: str, token: str, sheet: str, name: str) -> Optional[Dict[str, Any]]:
+    c = GASClient(url, token)
+    return c.get_payload(sheet, name) if c.ready else None
+
+def _gas_cache_clear():
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 #------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
 
 
@@ -353,31 +417,36 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
 
-    names = ['(無)'] + sorted(gas.list_names(sheet))
+    loading = _is_loading()
+
+    # ✅ 用 cache 減少清單讀取延遲
+    names = ['(無)'] + sorted(_cache_gas_list(GAS_URL, GAS_TOKEN, sheet))
 
     c1, c2 = st.columns([1, 1], gap='medium')
     c3 = st.container()
 
     with c1:
-        sel = st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
-        load_btn = st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
+        sel = st.selectbox('選擇模板', names, key=f'{key_prefix}_sel', disabled=loading)
+        load_btn = st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load', disabled=loading)
     with c2:
-        del_sel = st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel')
-        del_btn = st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
+        del_sel = st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel', disabled=loading)
+        del_btn = st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del', disabled=loading)
     with c3:
-        new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
-        save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
+        new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new', disabled=loading)
+        save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save', disabled=loading)
 
-    # 先處理動作，再顯示目前套用（才會即時更新）
+    # ===== 動作：載入 =====
     if load_btn:
         if sel == '(無)':
             st.warning('請先選擇要載入的模板')
         else:
-            payload = gas.get_payload(sheet, sel)
-            if payload is None:
-                st.error('載入失敗：請確認雲端連線 / 權限')
-            else:
-                try:
+            _begin_loading('讀取模板中...')
+            try:
+                # ✅ 用 cache 取 payload（比較快）
+                payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, sel)
+                if payload is None:
+                    st.error('載入失敗：請確認雲端連線 / 權限')
+                else:
                     df_loaded = from_payload(payload)
                     st.session_state[df_key] = df_loaded
                     st.session_state[active_key] = sel
@@ -391,35 +460,53 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
                         st.session_state.pop('prod_editor', None)
 
                     st.success(f'已載入：{sel}')
-                    _force_rerun()
-                except Exception as e:
-                    st.error(f'載入解析失敗：{e}')
 
+                    # ✅ 模板資料變動：清 cache，避免下次清單/內容不更新
+                    _gas_cache_clear()
+
+                    _force_rerun()
+            except Exception as e:
+                st.error(f'載入解析失敗：{e}')
+            finally:
+                _end_loading()
+
+    # ===== 動作：儲存 =====
     if save_btn:
         nm = (new_name or '').strip()
         if not nm:
             st.warning('請先輸入「另存為模板名稱」')
         else:
-            ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
-            if ok:
-                st.session_state[active_key] = nm
-                st.success(msg)
-                _force_rerun()
-            else:
-                st.error(msg)
+            _begin_loading('儲存模板中...')
+            try:
+                ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
+                if ok:
+                    st.session_state[active_key] = nm
+                    st.success(msg)
+                    _gas_cache_clear()
+                    _force_rerun()
+                else:
+                    st.error(msg)
+            finally:
+                _end_loading()
 
+    # ===== 動作：刪除 =====
     if del_btn:
         if del_sel == '(無)':
             st.warning('請先選擇要刪除的模板')
         else:
-            ok, msg = gas.delete(sheet, del_sel)
-            if ok:
-                if st.session_state.get(active_key) == del_sel:
-                    st.session_state[active_key] = ''
-                st.success(msg)
-                _force_rerun()
-            else:
-                st.error(msg)
+            _begin_loading('刪除模板中...')
+            try:
+                ok, msg = gas.delete(sheet, del_sel)
+                if ok:
+                    if st.session_state.get(active_key) == del_sel:
+                        st.session_state[active_key] = ''
+                    st.success(msg)
+                    _gas_cache_clear()
+                    _force_rerun()
+                else:
+                    st.error(msg)
+            finally:
+                _end_loading()
 
     st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(結束)：------
@@ -432,7 +519,16 @@ def box_table_block():
     st.markdown('### 箱型表格（勾選=參與計算；勾選後可刪除）')
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
 
+    loading = _is_loading()
     df = _sanitize_box(st.session_state.df_box)
+
+    st.markdown('<div class="loading-wrap">', unsafe_allow_html=True)
+    if loading:
+        # ✅ 讀取中：禁止操作（不顯示可編輯 editor）
+        st.info('資料讀取中…外箱表格暫時不可操作')
+        st.markdown(_loading_overlay_html(), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
 
     edited = st.data_editor(
         df,
@@ -457,45 +553,60 @@ def box_table_block():
 
     b1, b2, b3 = st.columns([1, 1, 1], gap='medium')
     with b1:
-        apply_btn = st.button('✅ 套用變更（外箱表格）', use_container_width=True, key='box_apply')
+        apply_btn = st.button('✅ 套用變更（外箱表格）', use_container_width=True, key='box_apply', disabled=loading)
     with b2:
-        del_btn = st.button('🗑️ 刪除勾選', use_container_width=True, key='box_del')
+        del_btn = st.button('🗑️ 刪除勾選', use_container_width=True, key='box_del', disabled=loading)
     with b3:
-        clear_btn = st.button('🧹 清除全部外箱', use_container_width=True, key='box_clear')
+        clear_btn = st.button('🧹 清除全部外箱', use_container_width=True, key='box_clear', disabled=loading)
 
     if apply_btn:
-        clean = _sanitize_box(edited)
-        st.session_state.df_box = clean
-        st.session_state['_box_live_df'] = clean.copy()
+        _begin_loading('套用外箱變更中...')
+        try:
+            clean = _sanitize_box(edited)
+            st.session_state.df_box = clean
+            st.session_state['_box_live_df'] = clean.copy()
 
-        if gas.ready and (st.session_state.get('active_box_tpl') or '').strip():
-            tpl = st.session_state['active_box_tpl']
-            ok, msg = gas.upsert(SHEET_BOX, tpl, _box_payload(clean))
-            if ok:
-                st.success(f'已套用並同步更新模板：{tpl}')
+            if gas.ready and (st.session_state.get('active_box_tpl') or '').strip():
+                tpl = st.session_state['active_box_tpl']
+                ok, msg = gas.upsert(SHEET_BOX, tpl, _box_payload(clean))
+                if ok:
+                    st.success(f'已套用並同步更新模板：{tpl}')
+                else:
+                    st.error(msg)
             else:
-                st.error(msg)
-        else:
-            st.success('已套用外箱表格變更')
+                st.success('已套用外箱表格變更')
 
-        _force_rerun()
+            _gas_cache_clear()
+            _force_rerun()
+        finally:
+            _end_loading()
 
     if del_btn:
-        d = _sanitize_box(edited)
-        d = d[~d['選取']].reset_index(drop=True)
-        d = _sanitize_box(d)
-        st.session_state.df_box = d
-        st.session_state['_box_live_df'] = d.copy()
-        st.success('已刪除勾選外箱')
-        _force_rerun()
+        _begin_loading('刪除外箱中...')
+        try:
+            d = _sanitize_box(edited)
+            d = d[~d['選取']].reset_index(drop=True)
+            d = _sanitize_box(d)
+            st.session_state.df_box = d
+            st.session_state['_box_live_df'] = d.copy()
+            st.success('已刪除勾選外箱')
+            _force_rerun()
+        finally:
+            _end_loading()
 
     if clear_btn:
-        empty = pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
-        st.session_state.df_box = empty
-        st.session_state.active_box_tpl = ''
-        st.session_state['_box_live_df'] = empty.copy()
-        st.success('已清空全部外箱，並清除「目前套用」狀態')
-        _force_rerun()
+        _begin_loading('清除外箱中...')
+        try:
+            empty = pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
+            st.session_state.df_box = empty
+            st.session_state.active_box_tpl = ''
+            st.session_state['_box_live_df'] = empty.copy()
+            st.success('已清空全部外箱，並清除「目前套用」狀態')
+            _force_rerun()
+        finally:
+            _end_loading()
+
+    st.markdown('</div>', unsafe_allow_html=True)
 #------A011：外箱表格 UI（Data Editor + 操作按鈕）(結束)：------
 
 
@@ -505,7 +616,15 @@ def prod_table_block():
     st.markdown('### 商品表格（勾選=參與計算；勾選後可刪除）')
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
 
+    loading = _is_loading()
     df = _sanitize_prod(st.session_state.df_prod)
+
+    st.markdown('<div class="loading-wrap">', unsafe_allow_html=True)
+    if loading:
+        st.info('資料讀取中…商品表格暫時不可操作')
+        st.markdown(_loading_overlay_html(), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
 
     edited = st.data_editor(
         df,
@@ -530,45 +649,60 @@ def prod_table_block():
 
     b1, b2, b3 = st.columns([1, 1, 1], gap='medium')
     with b1:
-        apply_btn = st.button('✅ 套用變更（商品表格）', use_container_width=True, key='prod_apply')
+        apply_btn = st.button('✅ 套用變更（商品表格）', use_container_width=True, key='prod_apply', disabled=loading)
     with b2:
-        del_btn = st.button('🗑️ 刪除勾選', use_container_width=True, key='prod_del')
+        del_btn = st.button('🗑️ 刪除勾選', use_container_width=True, key='prod_del', disabled=loading)
     with b3:
-        clear_btn = st.button('🧹 清除全部商品', use_container_width=True, key='prod_clear')
+        clear_btn = st.button('🧹 清除全部商品', use_container_width=True, key='prod_clear', disabled=loading)
 
     if apply_btn:
-        clean = _sanitize_prod(edited)
-        st.session_state.df_prod = clean
-        st.session_state['_prod_live_df'] = clean.copy()
+        _begin_loading('套用商品變更中...')
+        try:
+            clean = _sanitize_prod(edited)
+            st.session_state.df_prod = clean
+            st.session_state['_prod_live_df'] = clean.copy()
 
-        if gas.ready and (st.session_state.get('active_prod_tpl') or '').strip():
-            tpl = st.session_state['active_prod_tpl']
-            ok, msg = gas.upsert(SHEET_PROD, tpl, _prod_payload(clean))
-            if ok:
-                st.success(f'已套用並同步更新模板：{tpl}')
+            if gas.ready and (st.session_state.get('active_prod_tpl') or '').strip():
+                tpl = st.session_state['active_prod_tpl']
+                ok, msg = gas.upsert(SHEET_PROD, tpl, _prod_payload(clean))
+                if ok:
+                    st.success(f'已套用並同步更新模板：{tpl}')
+                else:
+                    st.error(msg)
             else:
-                st.error(msg)
-        else:
-            st.success('已套用商品表格變更')
+                st.success('已套用商品表格變更')
 
-        _force_rerun()
+            _gas_cache_clear()
+            _force_rerun()
+        finally:
+            _end_loading()
 
     if del_btn:
-        d = _sanitize_prod(edited)
-        d = d[~d['選取']].reset_index(drop=True)
-        d = _sanitize_prod(d)
-        st.session_state.df_prod = d
-        st.session_state['_prod_live_df'] = d.copy()
-        st.success('已刪除勾選商品')
-        _force_rerun()
+        _begin_loading('刪除商品中...')
+        try:
+            d = _sanitize_prod(edited)
+            d = d[~d['選取']].reset_index(drop=True)
+            d = _sanitize_prod(d)
+            st.session_state.df_prod = d
+            st.session_state['_prod_live_df'] = d.copy()
+            st.success('已刪除勾選商品')
+            _force_rerun()
+        finally:
+            _end_loading()
 
     if clear_btn:
-        empty = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
-        st.session_state.df_prod = empty
-        st.session_state.active_prod_tpl = ''
-        st.session_state['_prod_live_df'] = empty.copy()
-        st.success('已清空全部商品，並清除「目前套用」狀態')
-        _force_rerun()
+        _begin_loading('清除商品中...')
+        try:
+            empty = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
+            st.session_state.df_prod = empty
+            st.session_state.active_prod_tpl = ''
+            st.session_state['_prod_live_df'] = empty.copy()
+            st.success('已清空全部商品，並清除「目前套用」狀態')
+            _force_rerun()
+        finally:
+            _end_loading()
+
+    st.markdown('</div>', unsafe_allow_html=True)
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(結束)：------
 
 
@@ -921,26 +1055,30 @@ def _total_items(df_prod:pd.DataFrame)->int:
 #------A017：商品總件數統計(用於檔名)(結束)：------
 
 
+#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(開始)：------
 def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
-    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
-        # ✅ 一律以「畫面上的真實資料」為準（尤其是載入模板後）
-        df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
-        df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
+    loading = _is_loading()
 
-        # ✅ 先做欄位/型別整理，並回寫，避免下次又讀到舊的
-        st.session_state.df_box  = _sanitize_box(df_box_src)
-        st.session_state.df_prod = _sanitize_prod(df_prod_src)
+    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+        _begin_loading('計算與 3D 模擬中...')
+        try:
+            df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
+            df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
 
-        with st.spinner('計算中...'):
-            st.session_state.last_result = pack_and_render(
-                st.session_state.order_name,
-                st.session_state.df_box,
-                st.session_state.df_prod
-            )
+            st.session_state.df_box  = _sanitize_box(df_box_src)
+            st.session_state.df_prod = _sanitize_prod(df_prod_src)
 
-        _force_rerun()
+            with st.spinner('計算中...'):
+                st.session_state.last_result = pack_and_render(
+                    st.session_state.order_name,
+                    st.session_state.df_box,
+                    st.session_state.df_prod
+                )
+            _force_rerun()
+        finally:
+            _end_loading()
 
     res = st.session_state.get('last_result')
     if not res:
@@ -965,7 +1103,7 @@ def result_block():
     )
     st.session_state.last_result = res
 
-    # ===== 報告摘要（你原本的內容保持不動；以下照你檔案原有 UI 繼續）=====
+    # ===== 報告摘要 =====
     st.markdown("### 🧾 訂單裝箱報告")
     st.markdown('<div class="soft-card">', unsafe_allow_html=True)
 
@@ -984,6 +1122,7 @@ def result_block():
         unsafe_allow_html=True
     )
 
+    # 未裝入警示
     if unfitted:
         counts = {}
         for it in unfitted:
@@ -1007,21 +1146,40 @@ def result_block():
         key='dl_report'
     )
 
-    # ===== 3D 顯示（沿用你目前的多箱顯示 UI / 下拉 or 多圖邏輯）=====
-    packed_bins = res.get('packed_bins') or []
+    # ===== 3D：改回 Tabs（每箱一頁）+ 旁邊顯示 legend =====
     if not packed_bins:
         st.info("本次沒有任何箱子成功裝入商品（可能全部商品尺寸不合）。")
         return
 
-    labels = [f"{p['name']}（裝入 {len(p.get('items') or [])} 件）" for p in packed_bins]
-    sel = st.selectbox("選擇要查看的箱子 3D 模擬", labels, index=0, key="sel_bin_3d")
+    # legend HTML（同色塊+品項名）
+    legend_html = "<div style='display:flex;flex-direction:column;gap:6px'>"
+    legend_html += "<div style='font-weight:900;margin-bottom:4px'>分類說明</div>"
+    for k, c in (color_map or {}).items():
+        legend_html += (
+            "<div style='display:flex;align-items:center;gap:8px'>"
+            f"<span style='width:14px;height:14px;border:2px solid #111;border-radius:3px;background:{c};display:inline-block'></span>"
+            f"<span>{k}</span></div>"
+        )
+    legend_html += "</div>"
 
-    idx = labels.index(sel)
-    box_meta = packed_bins[idx]['box']
-    fitted = list(packed_bins[idx].get('items') or [])
+    tab_titles = [f"{p['name']}（裝入 {len(p.get('items') or [])} 件）" for p in packed_bins]
+    tabs = st.tabs(tab_titles)
 
-    fig = build_3d_fig(box_meta, fitted, color_map=res.get('color_map') or {})
-    st.plotly_chart(fig, use_container_width=True)
+    for t, p in zip(tabs, packed_bins):
+        with t:
+            box_meta = p['box']
+            fitted = list(p.get('items') or [])
+
+            c1, c2 = st.columns([1, 3], gap='large')
+            with c1:
+                st.markdown(legend_html, unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='margin-top:10px;color:#444'>箱子尺寸：{box_meta['l']} × {box_meta['w']} × {box_meta['h']}</div>",
+                    unsafe_allow_html=True
+                )
+            with c2:
+                fig = build_3d_fig(box_meta, fitted, color_map=color_map)
+                st.plotly_chart(fig, use_container_width=True)
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
