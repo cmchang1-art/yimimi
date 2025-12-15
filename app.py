@@ -65,8 +65,62 @@ def _force_rerun():
             st.experimental_rerun()
         except Exception:
             pass
-#------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
 
+def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
+    """
+    將 st.data_editor 的 widget state（dict: edited_rows/added_rows/deleted_rows）
+    套用回 DataFrame，讓「不按套用」也能用最新勾選/修改結果進行計算。
+    """
+    if df is None:
+        df = pd.DataFrame()
+    out = df.copy()
+
+    if not isinstance(state, dict):
+        return out
+
+    edited_rows = state.get("edited_rows") or {}
+    deleted_rows = state.get("deleted_rows") or []
+    added_rows = state.get("added_rows") or []
+
+    # 1) 套用 edited_rows（row index -> {col: value}）
+    if isinstance(edited_rows, dict) and not out.empty:
+        for ridx, changes in edited_rows.items():
+            try:
+                i = int(ridx)
+            except Exception:
+                continue
+            if i < 0 or i >= len(out):
+                continue
+            if isinstance(changes, dict):
+                for col, val in changes.items():
+                    if col in out.columns:
+                        out.at[out.index[i], col] = val
+
+    # 2) 套用 deleted_rows（row index list）
+    if isinstance(deleted_rows, list) and not out.empty:
+        # 反向刪除避免 index 位移
+        for ridx in sorted([r for r in deleted_rows if isinstance(r, (int, float, str))], reverse=True):
+            try:
+                i = int(ridx)
+            except Exception:
+                continue
+            if 0 <= i < len(out):
+                out = out.drop(out.index[i])
+
+        out = out.reset_index(drop=True)
+
+    # 3) 套用 added_rows（list of dict）
+    if isinstance(added_rows, list):
+        for row in added_rows:
+            if isinstance(row, dict):
+                # 只保留已存在欄位；若 df 原本是空，先用 row 建欄位
+                if out.empty and len(out.columns) == 0:
+                    out = pd.DataFrame(columns=list(row.keys()))
+                safe_row = {c: row.get(c, "") for c in out.columns}
+                out = pd.concat([out, pd.DataFrame([safe_row])], ignore_index=True)
+
+    return out
+#------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
 
 
 #------A005：Google Apps Script(GAS) API Client(開始)：------
@@ -685,55 +739,97 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
+        # ✅ 這裡改成：把 data_editor 的變更狀態套回 DataFrame（不必先按「套用變更」）
         try:
-            st.session_state.df_box=_sanitize_box(st.session_state.get('box_editor', st.session_state.df_box))
-            st.session_state.df_prod=_sanitize_prod(st.session_state.get('prod_editor', st.session_state.df_prod))
+            df_box_live = _apply_editor_state(st.session_state.df_box, st.session_state.get('box_editor'))
+            df_prod_live = _apply_editor_state(st.session_state.df_prod, st.session_state.get('prod_editor'))
+
+            st.session_state.df_box = _sanitize_box(df_box_live)
+            st.session_state.df_prod = _sanitize_prod(df_prod_live)
         except Exception:
+            # 就算出錯也不要中斷
             pass
+
         with st.spinner('計算中...'):
-            st.session_state.last_result=pack_and_render(
-                st.session_state.order_name, 
-                st.session_state.df_box, 
+            st.session_state.last_result = pack_and_render(
+                st.session_state.order_name,
+                st.session_state.df_box,
                 st.session_state.df_prod
             )
 
-    res=st.session_state.get('last_result')
-    if not res: 
+        _force_rerun()
+
+    res = st.session_state.get('last_result')
+    if not res:
         return
-    if not res.get('ok'): 
-        st.error(res.get('error','計算失敗'))
+    if not res.get('ok'):
+        st.error(res.get('error', '計算失敗'))
         return
 
-    box=res['box']
-    st.markdown('<div class="soft-title">裝箱結果</div>', unsafe_allow_html=True)
-    st.write(f"訂單：{st.session_state.order_name}")
-    st.write(f"使用外箱：{box['name']}（{box['l']}×{box['w']}×{box['h']}）× 1 箱")
-    st.write(f"內容淨重：{res['content_wt']:.2f} kg")
-    st.write(f"本次總重：{res['total_wt']:.2f} kg")
-    st.write(f"空間利用率：{res['util']:.2f}%")
+    box = res['box']
 
+    # ===== 圖2那種「報告式」UI =====
+    st.markdown("### 🧾 訂單裝箱報告")
+    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
+
+    # 左側條列資訊（模擬圖2）
+    st.markdown(
+        f"""
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div>🧾 <b>訂單名稱</b>　<span style="color:#1f6feb;font-weight:800">{st.session_state.order_name}</span></div>
+          <div>🕒 <b>計算時間</b>　{_now_tw().strftime('%Y-%m-%d %H:%M:%S (台灣時間)')}</div>
+          <div>📦 <b>使用外箱</b>　{box['name']}（{box['l']}×{box['w']}×{box['h']}）× 1 箱</div>
+          <div>⚖️ <b>內容淨重</b>　{res['content_wt']:.2f} kg</div>
+          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{res['total_wt']:.2f} kg</span></div>
+          <div>📊 <b>空間利用率</b>　{res['util']:.2f}%</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 裝不下提示（做成圖2那種警示條）
     if res['unfitted']:
-        counts={}
+        counts = {}
         for it in res['unfitted']:
-            base=str(it.name).split('_')[0]
-            counts[base]=counts.get(base,0)+1
-        st.warning('注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）')
-        for k,v in counts.items(): 
-            st.error(f"{k}：超過 {v} 個")
+            base = str(it.name).split('_')[0]
+            counts[base] = counts.get(base, 0) + 1
 
-    st.plotly_chart(res['fig'], use_container_width=True)
+        st.markdown(
+            """
+            <div style="margin-top:12px;border:1px solid #f2b8b5;background:#fdecea;padding:10px 12px;border-radius:10px">
+              ❌ <b>注意：</b>有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        for k, v in counts.items():
+            st.markdown(
+                f"""
+                <div style="margin-top:8px;border:1px solid #f2b8b5;background:#fdecea;padding:8px 12px;border-radius:10px">
+                  ⚠️ <b>{k}</b>：超過 <b>{v}</b> 個
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    ts=_now_tw().strftime('%Y%m%d_%H%M')
-    fname=f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 下載按鈕（放在報告下方，像圖2）
+    ts = _now_tw().strftime('%Y%m%d_%H%M')
+    fname = f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
     st.download_button(
-        '⬇️ 下載完整裝箱報告（.html）', 
-        data=res['report_html'].encode('utf-8'), 
-        file_name=fname, 
-        mime='text/html', 
-        use_container_width=True, 
+        '⬇️ 下載完整裝箱報告（.html）',
+        data=res['report_html'].encode('utf-8'),
+        file_name=fname,
+        mime='text/html',
+        use_container_width=True,
         key='dl_report'
     )
+
+    # 3D 圖（放在最下方）
+    st.plotly_chart(res['fig'], use_container_width=True)
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
+
 
 
 #------A019：主程式 UI（版面配置：左右 / 上下）(開始)：------
