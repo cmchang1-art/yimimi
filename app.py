@@ -640,7 +640,6 @@ def result_block():
         for k,v in counts.items(): 
             st.error(f"{k}：超過 {v} 個")
 
-    st.markdown('</div>', unsafe_allow_html=True)
     st.plotly_chart(res['fig'], use_container_width=True)
 
     ts=_now_tw().strftime('%Y%m%d_%H%M')
