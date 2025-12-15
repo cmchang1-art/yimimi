@@ -269,7 +269,11 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
     names=['(無)']+sorted(gas.list_names(sheet))
+# 第一排：建立 C1 和 C2
+# 這裡的 list 代表比例，[1, 1] 表示兩者各佔 50%
     c1,c2=st.columns([1,1],gap='medium')
+# 第二排：建立 C3
+# 使用 container 來代表這是一個獨立的區塊（預設佔滿整行）
     c3 = st.container()
     with c1:
         sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
