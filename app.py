@@ -226,7 +226,6 @@ class GASClient:
         d=self._call('delete',sheet,name=name)
         return (True,'已刪除') if d.get('ok') else (False, f"刪除失敗：{d.get('error','未知錯誤')}")
 
-gas=GASClient(GAS_URL,GAS_TOKEN)
 #------A005：Google Apps Script(GAS) API Client(結束)：------
 
 
