@@ -332,54 +332,78 @@ if GAS_URL:
 
 
 #------A007：外箱資料清理/防呆(開始)：------
-import pandas as pd
+def _to_float(v, default: float = 0.0) -> float:
+    """把各種輸入(字串/None/數字)安全轉 float；失敗回 default。"""
+    try:
+        if v is None:
+            return float(default)
+        # Streamlit data_editor 可能回傳 numpy / pandas 型別
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip()
+        if s == "":
+            return float(default)
+        # 去掉常見分隔符號
+        s = s.replace(",", "")
+        return float(s)
+    except Exception:
+        return float(default)
 
 def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
-    cols = ['選取','名稱','長','寬','高','數量','空箱重量']
-
-    # 兜底：避免你漏了 _to_float 造成 NameError
-    _to_float_global = globals().get("_to_float")
-    def _to_float_local(x, default=0.0):
-        try:
-            if x is None: return float(default)
-            s = str(x).strip().replace(",", "")
-            if s == "": return float(default)
-            return float(s)
-        except Exception:
-            return float(default)
-
-    _to_float_use = _to_float_global if callable(_to_float_global) else _to_float_local
+    """
+    外箱表格清理：
+    - 補齊欄位
+    - 轉型
+    - 移除空白列
+    - 不強塞預設值（清完是空就回空）
+    """
+    cols = ["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]
 
     if df is None:
         df = pd.DataFrame(columns=cols)
 
     df = df.copy()
+
+    # 補欄位
     for c in cols:
         if c not in df.columns:
-            df[c] = '' if c == '名稱' else 0
+            df[c] = "" if c == "名稱" else 0
 
-    df = df[cols].fillna('')
+    # 僅保留順序一致欄位
+    df = df[cols]
 
-    # 空表就直接回空（不要硬塞預設）
+    # 先把 NaN/None 變成空字串，避免 apply 時噴型別錯
+    df = df.fillna("")
+
+    # 空表直接回傳空表（不要硬塞預設外箱）
     if df.empty:
         return pd.DataFrame(columns=cols)
 
-    # 選取欄位轉 bool
-    df['選取'] = df['選取'].apply(lambda v: bool(v))
+    # 選取轉 bool（容錯：'TRUE'/'False'/1/0）
+    def _to_bool(x):
+        if isinstance(x, bool):
+            return x
+        s = str(x).strip().lower()
+        return s in ("1", "true", "t", "yes", "y", "✅")
 
-    # 數值欄位轉型
-    for c in ['長','寬','高','空箱重量']:
-        df[c] = df[c].apply(lambda x: _to_float_use(x, 0))
+    df["選取"] = df["選取"].apply(_to_bool)
 
-    df['數量'] = df['數量'].apply(lambda x: int(_to_float_use(x, 0)))
+    # 名稱轉字串
+    df["名稱"] = df["名稱"].apply(lambda x: str(x).strip() if x is not None else "")
 
-    # 移除全空列
-    def _empty_row(r):
-        return (not str(r['名稱']).strip()) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
+    # 尺寸重量轉 float；數量轉 int
+    for c in ["長", "寬", "高", "空箱重量"]:
+        df[c] = df[c].apply(lambda x: _to_float(x, 0.0))
 
-    df = df[~df.apply(_empty_row, axis=1)].reset_index(drop=True)
+    df["數量"] = df["數量"].apply(lambda x: int(_to_float(x, 0.0)))
 
-    # 清完若空，保持空
+    # 判斷空白列：名稱空 + 尺寸全 0 + 數量 0
+    def _is_empty_row(r):
+        return (r["名稱"] == "") and (r["長"] == 0) and (r["寬"] == 0) and (r["高"] == 0) and (r["數量"] == 0)
+
+    df = df[~df.apply(_is_empty_row, axis=1)].reset_index(drop=True)
+
+    # 清完變空就回空（不回填預設）
     if df.empty:
         return pd.DataFrame(columns=cols)
 
