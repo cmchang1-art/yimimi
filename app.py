@@ -319,185 +319,154 @@ if GAS_URL:
 #------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(結束)：------
 
 
-#------A007：Action Queue + Busy 防呆遮罩（完整工具組）(開始)：------
+#------A007：全域防呆遮罩 + Action 兩段式觸發器（真防呆/避免NameError）(開始)：------
 import time
-import html
-import streamlit as st
+import uuid
+from typing import Callable, Dict, Any, Optional
 
-# ==============
-# 狀態 key 統一
-# ==============
-_SS_BUSY = "__busy"
-_SS_ACTION = "__action"          # 目前要執行的 action 名稱
-_SS_ACTION_MSG = "__action_msg"  # 遮罩訊息
-_SS_RENDER_NONCE = "__render_nonce"  # 用於產生唯一 key，避免 DuplicateElementId
+def _ensure_busy_state():
+    if "_ui_busy" not in st.session_state:
+        st.session_state._ui_busy = {
+            "busy": False,
+            "msg": "",
+            "since": 0.0,
+            "token": "",
+        }
+    if "_action_queue" not in st.session_state:
+        st.session_state._action_queue = None
+    if "_render_nonce" not in st.session_state:
+        st.session_state._render_nonce = 0
 
-
-def _ensure_action_system():
-    """確保 session_state 有需要的欄位。"""
-    if _SS_BUSY not in st.session_state:
-        st.session_state[_SS_BUSY] = False
-    if _SS_ACTION not in st.session_state:
-        st.session_state[_SS_ACTION] = None
-    if _SS_ACTION_MSG not in st.session_state:
-        st.session_state[_SS_ACTION_MSG] = ""
-    if _SS_RENDER_NONCE not in st.session_state:
-        st.session_state[_SS_RENDER_NONCE] = 0
-
+def _set_busy(is_busy: bool, msg: str = ""):
+    _ensure_busy_state()
+    st.session_state._ui_busy["busy"] = bool(is_busy)
+    st.session_state._ui_busy["msg"] = msg or ""
+    st.session_state._ui_busy["since"] = time.time() if is_busy else 0.0
+    st.session_state._ui_busy["token"] = uuid.uuid4().hex if is_busy else ""
 
 def _is_busy() -> bool:
-    _ensure_action_system()
-    return bool(st.session_state.get(_SS_BUSY, False))
+    _ensure_busy_state()
+    return bool(st.session_state._ui_busy.get("busy", False))
 
-
-def _set_busy(flag: bool, msg: str = ""):
-    _ensure_action_system()
-    st.session_state[_SS_BUSY] = bool(flag)
-    if msg is not None:
-        st.session_state[_SS_ACTION_MSG] = str(msg)
-
-
-def _bump_render_nonce():
-    _ensure_action_system()
-    st.session_state[_SS_RENDER_NONCE] = int(st.session_state[_SS_RENDER_NONCE]) + 1
-
+def _busy_msg() -> str:
+    _ensure_busy_state()
+    return st.session_state._ui_busy.get("msg", "") or "處理中…請稍候"
 
 def _get_render_nonce() -> int:
-    _ensure_action_system()
-    return int(st.session_state[_SS_RENDER_NONCE])
-
-
-def _trigger(action_name: str, msg: str = "處理中..."):
     """
-    觸發一個 action：
-    1) 設定 busy + action
-    2) bump nonce（避免舊 key）
-    3) rerun，讓畫面先切到「遮罩狀態」
+    每次需要避免 Plotly/Element 重複 ID 時，用這個產生唯一序號。
     """
-    _ensure_action_system()
-    st.session_state[_SS_ACTION] = str(action_name)
-    _set_busy(True, msg)
-    _bump_render_nonce()
-    st.rerun()
-
-
-def _has_action() -> bool:
-    _ensure_action_system()
-    return st.session_state.get(_SS_ACTION) is not None
-
-
-def _pop_action():
-    """取出 action，並清空 action（避免重複執行）。"""
-    _ensure_action_system()
-    a = st.session_state.get(_SS_ACTION)
-    st.session_state[_SS_ACTION] = None
-    return a
-
+    _ensure_busy_state()
+    st.session_state._render_nonce += 1
+    return int(st.session_state._render_nonce)
 
 def _render_fullpage_overlay():
     """
-    全頁遮罩（CSS/HTML），用來阻擋點擊。
-    注意：Streamlit 長任務時，前端更新仍取決於 rerun 的時機；
-    本工具搭配 _trigger() 的 rerun，確保按鈕按下後「下一輪」先看到遮罩。
+    全頁遮罩：顯示處理中並阻擋所有操作（pointer-events: none）
+    注意：Streamlit 的 render 是串流式，這個要放在頁面很前面呼叫。
     """
-    _ensure_action_system()
+    _ensure_busy_state()
     if not _is_busy():
         return
 
-    msg = html.escape(st.session_state.get(_SS_ACTION_MSG, "處理中..."))
+    msg = _busy_msg()
+
     st.markdown(
         f"""
         <style>
-        .yimimi-overlay {{
-            position: fixed;
-            inset: 0;
-            z-index: 999999;
-            background: rgba(255,255,255,0.80);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            backdrop-filter: blur(1px);
+        /* 讓整頁內容無法點擊 */
+        div[data-testid="stAppViewContainer"] {{
+            pointer-events: none !important;
+            user-select: none !important;
         }}
-        .yimimi-overlay-card {{
-            background: white;
-            border: 1px solid rgba(0,0,0,0.10);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-            border-radius: 12px;
-            padding: 18px 18px;
-            min-width: 320px;
-            max-width: 520px;
-            text-align: center;
-        }}
-        .yimimi-overlay-title {{
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }}
-        .yimimi-overlay-sub {{
-            font-size: 13px;
-            opacity: .75;
-        }}
-        .yimimi-overlay-spinner {{
-            width: 34px;
-            height: 34px;
-            border-radius: 999px;
-            border: 4px solid rgba(0,0,0,0.12);
-            border-top-color: rgba(0,0,0,0.55);
-            margin: 0 auto 10px auto;
-            animation: yimimi-spin 0.9s linear infinite;
-        }}
-        @keyframes yimimi-spin {{
-            to {{ transform: rotate(360deg); }}
+        /* 但遮罩本身要可以顯示 */
+        #__busy_overlay {{
+            pointer-events: all !important;
         }}
         </style>
 
-        <div class="yimimi-overlay">
-            <div class="yimimi-overlay-card">
-                <div class="yimimi-overlay-spinner"></div>
-                <div class="yimimi-overlay-title">{msg}</div>
-                <div class="yimimi-overlay-sub">請稍候，完成後會自動恢復操作</div>
+        <div id="__busy_overlay"
+            style="
+                position: fixed;
+                z-index: 999999;
+                top: 0; left: 0;
+                width: 100vw; height: 100vh;
+                background: rgba(255,255,255,0.85);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-direction: column;
+            ">
+            <div style="
+                padding: 14px 18px;
+                border: 1px solid rgba(0,0,0,0.12);
+                border-radius: 10px;
+                background: white;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.10);
+                min-width: 260px;
+                text-align: center;
+                ">
+                <div style="font-size: 15px; font-weight: 700; margin-bottom: 6px;">⏳ {msg}</div>
+                <div style="font-size: 12px; color: rgba(0,0,0,0.55);">請等待資料處理完成後再操作</div>
             </div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-
-def _handle_action(action_map: dict):
+def _trigger(action_name: str, payload: Optional[dict] = None, busy_msg: str = "處理中…"):
     """
-    在「新的一輪 rerun」最上方呼叫它：
-    - 若有 action：先渲染遮罩，再執行工作
-    - 工作完成：busy=False + bump nonce + rerun
+    ✅ 第1段：按鈕按下當輪只做「立刻上鎖 + 記錄 action + rerun」
     """
-    _ensure_action_system()
+    _ensure_busy_state()
+    st.session_state._action_queue = {
+        "name": action_name,
+        "payload": payload or {},
+        "token": uuid.uuid4().hex,
+        "ts": time.time(),
+    }
+    _set_busy(True, busy_msg)
+    st.rerun()
 
-    if not _has_action():
+def _has_action() -> bool:
+    _ensure_busy_state()
+    return st.session_state._action_queue is not None
+
+def _handle_action(action_map: Dict[str, Callable[[dict], Any]]):
+    """
+    ✅ 第2段：下一輪真的執行耗時工作
+    - 執行期間保持 busy=True（遮罩不會解除）
+    - 完成後才解除 busy，並 rerun 讓 UI 顯示「已更新後的內容」
+    """
+    _ensure_busy_state()
+    q = st.session_state._action_queue
+    if not q:
         return
 
-    # 取出這輪要做的 action
-    act = _pop_action()
-    fn = action_map.get(act)
+    name = q.get("name")
+    payload = q.get("payload") or {}
 
-    # 先顯示遮罩（這輪一開始就渲染）
-    _render_fullpage_overlay()
-
-    # 執行工作（耗時）
     try:
-        if fn is not None:
-            with st.spinner(st.session_state.get(_SS_ACTION_MSG, "處理中...")):
-                fn()
-        else:
-            # 找不到對應 action，也要解除 busy，避免卡死
-            st.warning(f"找不到 action：{act}")
-    except Exception as e:
-        # 這裡不要吞錯，顯示錯誤給你看（不然又變白畫面不好查）
-        st.exception(e)
+        # 保證執行期間是 busy（避免你遇到「畫面恢復但其實還在跑」）
+        if not _is_busy():
+            _set_busy(True, "處理中…")
+
+        fn = action_map.get(name)
+        if fn is None:
+            raise NameError(f"Action handler not found: {name}")
+
+        # 用 spinner 讓「開始」更即時（比純遮罩更快被看到）
+        with st.spinner(_busy_msg()):
+            fn(payload)
+
     finally:
-        # 結束：解除 busy，並 rerun 讓 UI 用最新 state 重畫
+        # 清 action + 解鎖
+        st.session_state._action_queue = None
         _set_busy(False, "")
-        _bump_render_nonce()
+
+        # ✅ 重要：再 rerun 一次，確保畫面/資料真的以「完成後狀態」呈現
         st.rerun()
-#------A007：Action Queue + Busy 防呆遮罩（完整工具組）(結束)：------
+#------A007：全域防呆遮罩 + Action 兩段式觸發器（真防呆/避免NameError）(結束)：------
 
 
 
