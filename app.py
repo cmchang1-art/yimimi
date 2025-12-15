@@ -1090,47 +1090,42 @@ def _total_items(df_prod:pd.DataFrame)->int:
 #------A017：商品總件數統計(用於檔名)(結束)：------
 
 
-#------A018：裝箱結果與3D模擬（相容版/修正重複ID/3D按鈕真防呆）(開始)：------
+#------A018：裝箱結果與3D模擬（穩定版｜真防呆｜不白屏）(開始)：------
 def result_block():
-    # ✅ 第二段：如果上一輪按了按鈕，這輪就在這裡真的執行
+
+    # === action 階段：真的跑 3D 計算 ===
     def _do_run_3d(_payload: dict):
         st.session_state.pop("_last_3d_error", None)
 
-        # 1) 先嘗試從 session_state 指定（你若有自訂流程可用這個掛）
-        fn = st.session_state.get("_compute_3d_fn")
-
-        # 2) 若沒有，從全域找「你可能已經存在的函式名」
-        if not callable(fn):
-            candidates = [
-                "compute_3d_and_store_results",
-                "compute_and_store_results",
-                "run_3d_and_store_results",
-                "calculate_and_store_results",
-                "calculate_3d_and_store_results",
-            ]
-            for name in candidates:
-                if name in globals() and callable(globals()[name]):
-                    fn = globals()[name]
-                    break
-
-        if not callable(fn):
-            # 不要讓整頁爆炸，改成提示
-            st.session_state["_last_3d_error"] = "找不到 3D 計算函式（請確認 compute_3d_and_store_results 或指定 st.session_state['_compute_3d_fn']）"
-            return
-
-        # ✅ 真正執行（不要在這裡做任何 st.plotly_chart 渲染，渲染統一在下方）
         try:
-            fn()
+            df_box = st.session_state.get("_box_live_df", st.session_state.df_box)
+            df_prod = st.session_state.get("_prod_live_df", st.session_state.df_prod)
+
+            result = pack_and_render(
+                st.session_state.order_name,
+                df_box,
+                df_prod
+            )
+
+            if not result.get("ok"):
+                st.session_state["_last_3d_error"] = result.get("error", "3D 計算失敗")
+                st.session_state.pack_result = None
+                return
+
+            # ✅ 關鍵：把結果寫回 session_state
+            st.session_state.pack_result = result
+
         except Exception as e:
             st.session_state["_last_3d_error"] = f"{type(e).__name__}: {e}"
+            st.session_state.pack_result = None
 
     _handle_action({
         "RUN_3D": _do_run_3d,
     })
 
+    # === UI ===
     st.markdown("## 3. 裝箱結果與模擬")
 
-    # ✅ 第一段：按下按鈕立刻出現遮罩，下一輪才做耗時工作
     if st.button(
         "🚀 開始計算與 3D 模擬",
         use_container_width=True,
@@ -1138,49 +1133,50 @@ def result_block():
     ):
         _trigger("RUN_3D", "正在計算與產生 3D 模擬，請稍候...")
 
-    # 若上一輪計算有錯，先顯示（不讓整頁炸）
-    last_err = st.session_state.get("_last_3d_error")
-    if last_err:
-        st.error(f"3D 計算失敗：{last_err}")
-
-    # ====== 以下渲染結果（加上唯一 key，避免 DuplicateElementId）======
-    res = st.session_state.get("pack_result")  # 依你現有 session_state 名稱調整
-    if not res:
+    # 錯誤顯示（不白屏）
+    if st.session_state.get("_last_3d_error"):
+        st.error(f"3D 計算失敗：{st.session_state['_last_3d_error']}")
         return
 
-    figs = res.get("figs") or []     # 每箱一張 fig
-    boxes = res.get("boxes") or []   # 每箱資訊
+    res = st.session_state.get("pack_result")
+    if not res:
+        st.info("尚未進行 3D 裝箱計算。")
+        return
+
+    packed = res.get("packed_bins", [])
+    color_map = res.get("color_map", {})
     nonce = _get_render_nonce()
 
-    # ✅ 不要用下拉：用 tabs（頁籤）
-    tab_titles = []
-    for i, b in enumerate(boxes):
-        title = (b.get("title") or b.get("name")) or f"外箱{i+1}"
-        cnt = b.get("count")
-        tab_titles.append(f"{title}（{cnt}件）" if cnt is not None else title)
+    if not packed:
+        st.warning("本次沒有任何箱子成功裝入商品。")
+        return
 
-    tabs = st.tabs(tab_titles if tab_titles else ["外箱1"])
+    # === tabs（每箱一頁）===
+    tab_titles = [
+        f"{p['name']}（{len(p['items'])} 件）"
+        for p in packed
+    ]
 
-    for i, t in enumerate(tabs):
-        with t:
-            # 每箱裝入件數/箱型資訊
-            if i < len(boxes):
-                bi = boxes[i]
-                box_title = (bi.get("name") or bi.get("title") or f"外箱{i+1}")
-                st.caption(f"本箱裝入：{bi.get('count', 0)} 件｜箱型：{box_title}")
+    tabs = st.tabs(tab_titles)
 
-            # Plotly 圖：key 必須「每次 rerun 也不會撞」
-            if i < len(figs) and figs[i] is not None:
-                # fig 可能很大，hash 用 id() 就好（只求同一輪唯一）
-                fig_sig = id(figs[i])
-                st.plotly_chart(
-                    figs[i],
-                    use_container_width=True,
-                    key=f"plotly_box_{nonce}_{i}_{fig_sig}",
-                )
-            else:
-                st.info("此箱沒有 3D 圖可顯示。")
-#------A018：裝箱結果與3D模擬（相容版/修正重複ID/3D按鈕真防呆）(結束)：------
+    for i, tab in enumerate(tabs):
+        with tab:
+            p = packed[i]
+            box = p["box"]
+            items = p["items"]
+
+            st.caption(
+                f"箱型：{box['l']} × {box['w']} × {box['h']}｜裝入 {len(items)} 件"
+            )
+
+            fig = build_3d_fig(box, items, color_map=color_map)
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                key=f"plotly_box_{nonce}_{i}"
+            )
+#------A018：裝箱結果與3D模擬（穩定版｜真防呆｜不白屏）(結束)：------
 
 
 
