@@ -798,9 +798,19 @@ def result_block():
         for k,v in counts.items():
             st.error(f"{k}：超過 {v} 個")
 
-    st.plotly_chart(res['fig'], use_container_wi_
+    st.plotly_chart(res['fig'], use_container_width=True)
 
-
+    ts=_now_tw().strftime('%Y%m%d_%H%M')
+    fname=f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
+    st.download_button(
+        '⬇️ 下載完整裝箱報告（.html）',
+        data=res['report_html'].encode('utf-8'),
+        file_name=fname,
+        mime='text/html',
+        use_container_width=True,
+        key='dl_report'
+    )
+#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
 
