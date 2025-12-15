@@ -231,27 +231,76 @@ gas=GASClient(GAS_URL,GAS_TOKEN)
 
 
 
-#------A006：Session State 預設值初始化(開始)：------
-def _ensure_defaults():
-    if 'layout_mode' not in st.session_state: 
-        st.session_state.layout_mode='左右 50% / 50%'
-    if 'order_name' not in st.session_state: 
-        st.session_state.order_name=f"訂單_{_now_tw().strftime('%Y%m%d')}"
-    if 'df_box' not in st.session_state:
-        st.session_state.df_box=pd.DataFrame([
-            {'選取':True,'名稱':'手動箱','長':35.0,'寬':25.0,'高':20.0,'數量':1,'空箱重量':0.50}
-        ])
-    if 'df_prod' not in st.session_state:
-        st.session_state.df_prod=pd.DataFrame([
-            {'選取':True,'商品名稱':'禮盒(米餅)','長':21.0,'寬':14.0,'高':8.5,'重量(kg)':0.50,'數量':5}
-        ])
-    if 'active_box_tpl' not in st.session_state: 
-        st.session_state.active_box_tpl=''
-    if 'active_prod_tpl' not in st.session_state: 
-        st.session_state.active_prod_tpl=''
-    if 'last_result' not in st.session_state: 
-        st.session_state.last_result=None
-#------A006：Session State 預設值初始化(結束)：------
+#------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(開始)：------
+import os
+import requests
+
+def _get_secret(name: str, default: str = "") -> str:
+    """
+    ✅ 先讀 st.secrets，再讀環境變數，避免本機/雲端不同環境造成爆炸
+    """
+    try:
+        v = st.secrets.get(name, None)
+        if v is not None:
+            return str(v)
+    except Exception:
+        pass
+    return str(os.environ.get(name, default) or default)
+
+class GASClient:
+    """
+    Google Apps Script Web App（或你自己的 GAS API）呼叫器
+    你原本程式只要需要 gas.post({...}) / gas.get(...) 就能用
+    """
+    def __init__(self, url: str, token: str = "", timeout: int = 30):
+        self.url = (url or "").strip()
+        self.token = (token or "").strip()
+        self.timeout = int(timeout)
+
+    def _headers(self) -> dict:
+        h = {"Content-Type": "application/json"}
+        if self.token:
+            # 你原本用什麼 header 驗證就放這裡（常見：Authorization: Bearer）
+            h["Authorization"] = f"Bearer {self.token}"
+        return h
+
+    def post(self, payload: dict) -> dict:
+        """
+        ✅ 依你原本的 GAS 方式：傳 JSON payload 給 GAS_URL
+        """
+        if not self.url:
+            raise RuntimeError("GAS_URL 未設定，無法呼叫 GAS。")
+        r = requests.post(self.url, json=payload, headers=self._headers(), timeout=self.timeout)
+        r.raise_for_status()
+        try:
+            return r.json()
+        except Exception:
+            return {"ok": False, "raw": r.text}
+
+    def get(self, params: dict) -> dict:
+        if not self.url:
+            raise RuntimeError("GAS_URL 未設定，無法呼叫 GAS。")
+        r = requests.get(self.url, params=params, headers=self._headers(), timeout=self.timeout)
+        r.raise_for_status()
+        try:
+            return r.json()
+        except Exception:
+            return {"ok": False, "raw": r.text}
+
+
+# ✅ 安全初始化：沒設定就不要讓程式直接死掉
+GAS_URL = _get_secret("GAS_URL", "")
+GAS_TOKEN = _get_secret("GAS_TOKEN", "")
+
+gas = None
+if GAS_URL:
+    try:
+        gas = GASClient(GAS_URL, GAS_TOKEN)
+    except Exception as e:
+        # 不要讓整頁爆掉，改成後續 UI 顯示錯誤
+        st.session_state["_gas_init_error"] = str(e)
+        gas = None
+#------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(結束)：------
 
 
 #------A007：外箱資料清理/防呆(開始)：------
