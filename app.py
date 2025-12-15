@@ -270,6 +270,7 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         return
     names=['(無)']+sorted(gas.list_names(sheet))
     c1,c2=st.columns([0.5,0.5],gap='medium')
+    c3=st.columns([1],gap='medium')
     with c1:
         sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
         load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
