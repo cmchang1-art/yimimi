@@ -353,38 +353,41 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
 
-    names=['(無)']+sorted(gas.list_names(sheet))
+    names = ['(無)'] + sorted(gas.list_names(sheet))
 
-    c1,c2=st.columns([1,1],gap='medium')
-    c3=st.container()
+    c1, c2 = st.columns([1, 1], gap='medium')
+    c3 = st.container()
 
     with c1:
-        sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
-        load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
+        sel = st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
+        load_btn = st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
     with c2:
-        del_sel=st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel')
-        del_btn=st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
+        del_sel = st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel')
+        del_btn = st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
     with c3:
-        new_name=st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
-        save_btn=st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
+        new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
+        save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
 
     # 先處理動作，再顯示目前套用（才會即時更新）
     if load_btn:
-        if sel=='(無)':
+        if sel == '(無)':
             st.warning('請先選擇要載入的模板')
         else:
-            payload=gas.get_payload(sheet, sel)
+            payload = gas.get_payload(sheet, sel)
             if payload is None:
                 st.error('載入失敗：請確認雲端連線 / 權限')
             else:
                 try:
-                    st.session_state[df_key]=from_payload(payload)
-                    st.session_state[active_key]=sel
+                    df_loaded = from_payload(payload)
+                    st.session_state[df_key] = df_loaded
+                    st.session_state[active_key] = sel
 
-                    # ✅ 關鍵：載入模板後清掉 data_editor 的殘留狀態，避免影響開始計算/勾選判斷
+                    # ✅ 載入後同步更新「live df」，確保 3D 計算讀到的是最新畫面資料
                     if df_key == 'df_box':
+                        st.session_state['_box_live_df'] = df_loaded.copy()
                         st.session_state.pop('box_editor', None)
                     if df_key == 'df_prod':
+                        st.session_state['_prod_live_df'] = df_loaded.copy()
                         st.session_state.pop('prod_editor', None)
 
                     st.success(f'已載入：{sel}')
@@ -393,26 +396,26 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
                     st.error(f'載入解析失敗：{e}')
 
     if save_btn:
-        nm=(new_name or '').strip()
+        nm = (new_name or '').strip()
         if not nm:
             st.warning('請先輸入「另存為模板名稱」')
         else:
-            ok,msg=gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
+            ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
             if ok:
-                st.session_state[active_key]=nm
+                st.session_state[active_key] = nm
                 st.success(msg)
                 _force_rerun()
             else:
                 st.error(msg)
 
     if del_btn:
-        if del_sel=='(無)':
+        if del_sel == '(無)':
             st.warning('請先選擇要刪除的模板')
         else:
-            ok,msg=gas.delete(sheet, del_sel)
+            ok, msg = gas.delete(sheet, del_sel)
             if ok:
-                if st.session_state.get(active_key)==del_sel:
-                    st.session_state[active_key]=''
+                if st.session_state.get(active_key) == del_sel:
+                    st.session_state[active_key] = ''
                 st.success(msg)
                 _force_rerun()
             else:
@@ -431,39 +434,39 @@ def box_table_block():
 
     df = _sanitize_box(st.session_state.df_box)
 
-    with st.form(key="box_form", clear_on_submit=False):
-        edited = st.data_editor(
-            df,
-            key='box_editor',
-            hide_index=True,
-            num_rows='dynamic',
-            use_container_width=True,
-            height=320,
-            column_config={
-                '選取': st.column_config.CheckboxColumn('選取'),
-                '名稱': st.column_config.TextColumn('名稱'),
-                '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
-                '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
-                '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
-                '數量': st.column_config.NumberColumn('數量', step=1),
-                '空箱重量': st.column_config.NumberColumn('空箱重量', step=0.01, format='%.2f')
-            }
-        )
+    edited = st.data_editor(
+        df,
+        key='box_editor',
+        hide_index=True,
+        num_rows='dynamic',
+        use_container_width=True,
+        height=320,
+        column_config={
+            '選取': st.column_config.CheckboxColumn('選取'),
+            '名稱': st.column_config.TextColumn('名稱'),
+            '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
+            '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
+            '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
+            '數量': st.column_config.NumberColumn('數量', step=1),
+            '空箱重量': st.column_config.NumberColumn('空箱重量', step=0.01, format='%.2f')
+        }
+    )
 
-        # ✅ 關鍵：每次渲染就保存「畫面上的真實 DataFrame」
-        st.session_state['_box_live_df'] = edited.copy()
+    # ✅ 每次畫面更新都保存「當下表格」給 3D 計算使用
+    st.session_state['_box_live_df'] = edited.copy()
 
-        b1, b2, b3 = st.columns([1,1,1], gap='medium')
-        with b1:
-            apply_btn = st.form_submit_button('✅ 套用變更（外箱表格）', use_container_width=True)
-        with b2:
-            del_btn = st.form_submit_button('🗑️ 刪除勾選', use_container_width=True)
-        with b3:
-            clear_btn = st.form_submit_button('🧹 清除全部外箱', use_container_width=True)
+    b1, b2, b3 = st.columns([1, 1, 1], gap='medium')
+    with b1:
+        apply_btn = st.button('✅ 套用變更（外箱表格）', use_container_width=True, key='box_apply')
+    with b2:
+        del_btn = st.button('🗑️ 刪除勾選', use_container_width=True, key='box_del')
+    with b3:
+        clear_btn = st.button('🧹 清除全部外箱', use_container_width=True, key='box_clear')
 
     if apply_btn:
         clean = _sanitize_box(edited)
         st.session_state.df_box = clean
+        st.session_state['_box_live_df'] = clean.copy()
 
         if gas.ready and (st.session_state.get('active_box_tpl') or '').strip():
             tpl = st.session_state['active_box_tpl']
@@ -480,17 +483,21 @@ def box_table_block():
     if del_btn:
         d = _sanitize_box(edited)
         d = d[~d['選取']].reset_index(drop=True)
-        st.session_state.df_box = _sanitize_box(d)
+        d = _sanitize_box(d)
+        st.session_state.df_box = d
+        st.session_state['_box_live_df'] = d.copy()
         st.success('已刪除勾選外箱')
         _force_rerun()
 
     if clear_btn:
-        st.session_state.df_box = pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
+        empty = pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
+        st.session_state.df_box = empty
         st.session_state.active_box_tpl = ''
-        st.session_state['_box_live_df'] = st.session_state.df_box.copy()
+        st.session_state['_box_live_df'] = empty.copy()
         st.success('已清空全部外箱，並清除「目前套用」狀態')
         _force_rerun()
 #------A011：外箱表格 UI（Data Editor + 操作按鈕）(結束)：------
+
 
 
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(開始)：------
@@ -500,39 +507,39 @@ def prod_table_block():
 
     df = _sanitize_prod(st.session_state.df_prod)
 
-    with st.form(key="prod_form", clear_on_submit=False):
-        edited = st.data_editor(
-            df,
-            key='prod_editor',
-            hide_index=True,
-            num_rows='dynamic',
-            use_container_width=True,
-            height=320,
-            column_config={
-                '選取': st.column_config.CheckboxColumn('選取'),
-                '商品名稱': st.column_config.TextColumn('商品名稱'),
-                '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
-                '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
-                '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
-                '重量(kg)': st.column_config.NumberColumn('重量(kg)', step=0.01, format='%.2f'),
-                '數量': st.column_config.NumberColumn('數量', step=1)
-            }
-        )
+    edited = st.data_editor(
+        df,
+        key='prod_editor',
+        hide_index=True,
+        num_rows='dynamic',
+        use_container_width=True,
+        height=320,
+        column_config={
+            '選取': st.column_config.CheckboxColumn('選取'),
+            '商品名稱': st.column_config.TextColumn('商品名稱'),
+            '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
+            '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
+            '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
+            '重量(kg)': st.column_config.NumberColumn('重量(kg)', step=0.01, format='%.2f'),
+            '數量': st.column_config.NumberColumn('數量', step=1)
+        }
+    )
 
-        # ✅ 關鍵：每次渲染就保存「畫面上的真實 DataFrame」
-        st.session_state['_prod_live_df'] = edited.copy()
+    # ✅ 每次畫面更新都保存「當下表格」給 3D 計算使用
+    st.session_state['_prod_live_df'] = edited.copy()
 
-        b1, b2, b3 = st.columns([1,1,1], gap='medium')
-        with b1:
-            apply_btn = st.form_submit_button('✅ 套用變更（商品表格）', use_container_width=True)
-        with b2:
-            del_btn = st.form_submit_button('🗑️ 刪除勾選', use_container_width=True)
-        with b3:
-            clear_btn = st.form_submit_button('🧹 清除全部商品', use_container_width=True)
+    b1, b2, b3 = st.columns([1, 1, 1], gap='medium')
+    with b1:
+        apply_btn = st.button('✅ 套用變更（商品表格）', use_container_width=True, key='prod_apply')
+    with b2:
+        del_btn = st.button('🗑️ 刪除勾選', use_container_width=True, key='prod_del')
+    with b3:
+        clear_btn = st.button('🧹 清除全部商品', use_container_width=True, key='prod_clear')
 
     if apply_btn:
         clean = _sanitize_prod(edited)
         st.session_state.df_prod = clean
+        st.session_state['_prod_live_df'] = clean.copy()
 
         if gas.ready and (st.session_state.get('active_prod_tpl') or '').strip():
             tpl = st.session_state['active_prod_tpl']
@@ -549,14 +556,17 @@ def prod_table_block():
     if del_btn:
         d = _sanitize_prod(edited)
         d = d[~d['選取']].reset_index(drop=True)
-        st.session_state.df_prod = _sanitize_prod(d)
+        d = _sanitize_prod(d)
+        st.session_state.df_prod = d
+        st.session_state['_prod_live_df'] = d.copy()
         st.success('已刪除勾選商品')
         _force_rerun()
 
     if clear_btn:
-        st.session_state.df_prod = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
+        empty = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
+        st.session_state.df_prod = empty
         st.session_state.active_prod_tpl = ''
-        st.session_state['_prod_live_df'] = st.session_state.df_prod.copy()
+        st.session_state['_prod_live_df'] = empty.copy()
         st.success('已清空全部商品，並清除「目前套用」狀態')
         _force_rerun()
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(結束)：------
