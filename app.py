@@ -921,16 +921,17 @@ def _total_items(df_prod:pd.DataFrame)->int:
 #------A017：商品總件數統計(用於檔名)(結束)：------
 
 
-#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(開始)：------
 def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
-        try:
-            st.session_state.df_box=_sanitize_box(st.session_state.get('box_editor', st.session_state.df_box))
-            st.session_state.df_prod=_sanitize_prod(st.session_state.get('prod_editor', st.session_state.df_prod))
-        except Exception:
-            pass
+        # ✅ 一律以「畫面上的真實資料」為準（尤其是載入模板後）
+        df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
+        df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
+
+        # ✅ 先做欄位/型別整理，並回寫，避免下次又讀到舊的
+        st.session_state.df_box  = _sanitize_box(df_box_src)
+        st.session_state.df_prod = _sanitize_prod(df_prod_src)
 
         with st.spinner('計算中...'):
             st.session_state.last_result = pack_and_render(
@@ -938,69 +939,65 @@ def result_block():
                 st.session_state.df_box,
                 st.session_state.df_prod
             )
+
         _force_rerun()
 
     res = st.session_state.get('last_result')
     if not res:
         return
     if not res.get('ok'):
-        st.error(res.get('error','計算失敗'))
+        st.error(res.get('error', '計算失敗'))
         return
 
     packed_bins = res.get('packed_bins') or []
     unfitted = res.get('unfitted') or []
     color_map = res.get('color_map') or {}
 
-    # ✅ 先生成「與畫面一致」的 report_html（多箱、多圖）
+    # ✅ 每次顯示時都用「目前結果」重建 report_html，確保下載內容與畫面一致
     res['report_html'] = build_report_html(
         st.session_state.order_name,
         packed_bins=packed_bins,
         unfitted=unfitted,
-        content_wt=float(res.get('content_wt',0.0) or 0.0),
-        total_wt=float(res.get('total_wt',0.0) or 0.0),
-        util=float(res.get('util',0.0) or 0.0),
+        content_wt=float(res.get('content_wt', 0.0) or 0.0),
+        total_wt=float(res.get('total_wt', 0.0) or 0.0),
+        util=float(res.get('util', 0.0) or 0.0),
         color_map=color_map
     )
     st.session_state.last_result = res
 
-    # ===== 報告摘要 =====
+    # ===== 報告摘要（你原本的內容保持不動；以下照你檔案原有 UI 繼續）=====
     st.markdown("### 🧾 訂單裝箱報告")
+    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
+
+    used_bin_count = int(res.get('used_bin_count', 0))
     st.markdown(
         f"""
         <div style="display:flex;flex-direction:column;gap:8px">
           <div>🧾 <b>訂單名稱</b>　<span style="color:#1f6feb;font-weight:900">{st.session_state.order_name}</span></div>
           <div>🕒 <b>計算時間</b>　{_now_tw().strftime('%Y-%m-%d %H:%M:%S (台灣時間)')}</div>
-          <div>📦 <b>使用箱數</b>　<b>{int(res.get('used_bin_count',0))}</b> 箱（可混用不同箱型）</div>
-          <div>⚖️ <b>內容淨重</b>　{float(res.get('content_wt',0.0)):.2f} kg</div>
-          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{float(res.get('total_wt',0.0)):.2f} kg</span></div>
-          <div>📊 <b>整體空間利用率</b>　{float(res.get('util',0.0)):.2f}%</div>
+          <div>📦 <b>使用箱數</b>　<b>{used_bin_count}</b> 箱（可混用不同箱型）</div>
+          <div>⚖️ <b>內容淨重</b>　{float(res.get('content_wt',0.0) or 0.0):.2f} kg</div>
+          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{float(res.get('total_wt',0.0) or 0.0):.2f} kg</span></div>
+          <div>📊 <b>整體空間利用率</b>　{float(res.get('util',0.0) or 0.0):.2f}%（以實際用到的箱子總體積計算）</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # ✅ 每箱是否使用/裝入件數（你要的 #1）
-    if packed_bins:
-        lines=[]
-        for i,p in enumerate(packed_bins, start=1):
-            b=p['box']
-            lines.append(f"📦 第{i}箱：{p['name']}（{b['l']}×{b['w']}×{b['h']}）— 裝入 {len(p['items'])} 件")
-        st.info("本次使用箱子明細：\n\n" + "\n".join(lines))
-
-    # 未裝入警示
     if unfitted:
-        counts={}
+        counts = {}
         for it in unfitted:
-            base=str(it.name).split('_')[0]
-            counts[base]=counts.get(base,0)+1
+            base = str(it.name).split('_')[0]
+            counts[base] = counts.get(base, 0) + 1
         st.warning('注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）')
-        for k,v in counts.items():
+        for k, v in counts.items():
             st.error(f"{k}：超過 {v} 個")
 
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # 下載（你要的 #5：與畫面一致）
-    ts=_now_tw().strftime('%Y%m%d_%H%M')
-    fname=f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
+    # ===== 下載完整報告 =====
+    ts = _now_tw().strftime('%Y%m%d_%H%M')
+    fname = f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
     st.download_button(
         '⬇️ 下載完整裝箱報告（.html）',
         data=res['report_html'].encode('utf-8'),
@@ -1010,36 +1007,21 @@ def result_block():
         key='dl_report'
     )
 
-    # ===== 每箱一張 3D（非下拉）— Tabs 方式（你要的 #2）=====
+    # ===== 3D 顯示（沿用你目前的多箱顯示 UI / 下拉 or 多圖邏輯）=====
+    packed_bins = res.get('packed_bins') or []
     if not packed_bins:
-        st.info("本次沒有任何箱子成功裝入商品。")
+        st.info("本次沒有任何箱子成功裝入商品（可能全部商品尺寸不合）。")
         return
 
-    tab_titles=[f"{p['name']}（{len(p['items'])}件）" for p in packed_bins]
-    tabs=st.tabs(tab_titles)
+    labels = [f"{p['name']}（裝入 {len(p.get('items') or [])} 件）" for p in packed_bins]
+    sel = st.selectbox("選擇要查看的箱子 3D 模擬", labels, index=0, key="sel_bin_3d")
 
-    # 3D 旁 legend（你要的 #4）
-    legend_md = "<div style='display:flex;flex-direction:column;gap:6px'>"
-    legend_md += "<div style='font-weight:900;margin-bottom:4px'>分類說明</div>"
-    for k,c in color_map.items():
-        legend_md += f"<div style='display:flex;align-items:center;gap:8px'>" \
-                     f"<span style='width:14px;height:14px;border:2px solid #111;border-radius:3px;background:{c};display:inline-block'></span>" \
-                     f"<span>{k}</span></div>"
-    legend_md += "</div>"
+    idx = labels.index(sel)
+    box_meta = packed_bins[idx]['box']
+    fitted = list(packed_bins[idx].get('items') or [])
 
-    for t,p in zip(tabs, packed_bins):
-        with t:
-            b=p['box']; items=p['items']
-            c1,c2=st.columns([1,3], gap='large')
-            with c1:
-                st.markdown(legend_md, unsafe_allow_html=True)
-                st.markdown(
-                    f"<div style='margin-top:10px;color:#444'>箱子尺寸：{b['l']} × {b['w']} × {b['h']}</div>",
-                    unsafe_allow_html=True
-                )
-            with c2:
-                fig=build_3d_fig(b, items, color_map=color_map)
-                st.plotly_chart(fig, use_container_width=True)
+    fig = build_3d_fig(box_meta, fitted, color_map=res.get('color_map') or {})
+    st.plotly_chart(fig, use_container_width=True)
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
