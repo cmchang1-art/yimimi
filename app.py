@@ -268,61 +268,98 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
     if not gas.ready:
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
-    names=['(無)']+sorted(gas.list_names(sheet))
-# 第一排：建立 C1 和 C2
-# 這裡的 list 代表比例，[1, 1] 表示兩者各佔 50%
-    c1,c2=st.columns([1,1],gap='medium')
-# 第二排：建立 C3
-# 使用 container 來代表這是一個獨立的區塊（預設佔滿整行）
+
+    # 用版本號 rev 讓 selectbox/輸入框在儲存/刪除後「重新建立」，避免選單卡住不更新
+    rev_key = f"{key_prefix}_rev"
+    if rev_key not in st.session_state:
+        st.session_state[rev_key] = 0
+    rev = int(st.session_state[rev_key])
+
+    def _force_rerun():
+        # Streamlit 新版：st.rerun；舊版：st.experimental_rerun
+        try:
+            st.rerun()
+        except Exception:
+            try:
+                st.experimental_rerun()
+            except Exception:
+                pass
+
+    # 每次渲染都重新拉一次名稱清單（但只有 rerun 才會立即看到更新）
+    names = ['(無)'] + sorted(gas.list_names(sheet))
+
+    # 第一排：左右兩欄
+    c1, c2 = st.columns([1, 1], gap='medium')
+    # 第二排：整行容器
     c3 = st.container()
+
     with c1:
-        sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
-        load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
+        sel = st.selectbox('選擇模板', names, key=f'{key_prefix}_sel_{rev}')
+        load_btn = st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load_{rev}')
     with c2:
-        del_sel=st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel')
-        del_btn=st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del')
+        del_sel = st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel_{rev}')
+        del_btn = st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del_{rev}')
     with c3:
-        new_name=st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
-        save_btn=st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
+        new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new_{rev}')
+        save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save_{rev}')
+
     st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
 
+    # 載入
     if load_btn:
-        if sel=='(無)': 
+        if sel == '(無)':
             st.warning('請先選擇要載入的模板')
         else:
-            payload=gas.get_payload(sheet, sel)
-            if payload is None: 
+            payload = gas.get_payload(sheet, sel)
+            if payload is None:
                 st.error('載入失敗：請確認雲端連線 / 權限')
             else:
                 try:
-                    st.session_state[df_key]=from_payload(payload)
-                    st.session_state[active_key]=sel
+                    st.session_state[df_key] = from_payload(payload)
+                    st.session_state[active_key] = sel
                     st.success(f'已載入：{sel}')
+                    # 載入後不一定要 rerun（你想要立即刷新表格也可 rerun）
                 except Exception as e:
                     st.error(f'載入解析失敗：{e}')
 
+    # 儲存（create_only）
     if save_btn:
-        nm=(new_name or '').strip()
-        if not nm: 
+        nm = (new_name or '').strip()
+        if not nm:
             st.warning('請先輸入「另存為模板名稱」')
         else:
-            ok,msg=gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
-            if ok: 
-                st.session_state[active_key]=nm
+            ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
+            if ok:
+                st.session_state[active_key] = nm
+
+                # 讓下一輪 UI 直接選到新模板
+                st.session_state[rev_key] = rev + 1
+                st.session_state[f'{key_prefix}_sel_{rev+1}'] = nm
+                st.session_state[f'{key_prefix}_del_sel_{rev+1}'] = nm
+
                 st.success(msg)
-            else: 
+                _force_rerun()
+            else:
                 st.error(msg)
 
+    # 刪除
     if del_btn:
-        if del_sel=='(無)': 
+        if del_sel == '(無)':
             st.warning('請先選擇要刪除的模板')
         else:
-            ok,msg=gas.delete(sheet, del_sel)
+            ok, msg = gas.delete(sheet, del_sel)
             if ok:
-                if st.session_state.get(active_key)==del_sel: 
-                    st.session_state[active_key]=''
+                if st.session_state.get(active_key) == del_sel:
+                    st.session_state[active_key] = ''
+
+                # 刪除後回到 (無) 並刷新選單
+                st.session_state[rev_key] = rev + 1
+                st.session_state[f'{key_prefix}_sel_{rev+1}'] = '(無)'
+                st.session_state[f'{key_prefix}_del_sel_{rev+1}'] = '(無)'
+
                 st.success(msg)
-            else: 
+                _force_rerun()
+            else:
                 st.error(msg)
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(結束)：------
 
