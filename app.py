@@ -422,9 +422,6 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
     # ✅ 用 cache 減少清單讀取延遲
     names = ['(無)'] + sorted(_cache_gas_list(GAS_URL, GAS_TOKEN, sheet))
 
-    # ✅ 整段包在 loading-wrap 內，overlay 才能「覆蓋」控制項
-    st.markdown('<div class="loading-wrap">', unsafe_allow_html=True)
-
     c1, c2 = st.columns([1, 1], gap='medium')
     c3 = st.container()
 
@@ -438,19 +435,14 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new', disabled=loading)
         save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save', disabled=loading)
 
-    # ✅ 若目前正處於 loading 狀態（上一輪 rerun 後），顯示 overlay
-    if loading:
-        st.markdown(_loading_overlay_html(), unsafe_allow_html=True)
-
     # ===== 動作：載入 =====
     if load_btn:
         if sel == '(無)':
             st.warning('請先選擇要載入的模板')
         else:
             _begin_loading('讀取模板中...')
-            # ✅ 關鍵：同一次 run 立即渲染 overlay（使用者才看得到）
-            st.markdown(_loading_overlay_html('讀取模板中...'), unsafe_allow_html=True)
             try:
+                # ✅ 用 cache 取 payload（比較快）
                 payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, sel)
                 if payload is None:
                     st.error('載入失敗：請確認雲端連線 / 權限')
@@ -459,7 +451,7 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
                     st.session_state[df_key] = df_loaded
                     st.session_state[active_key] = sel
 
-                    # ✅ 載入後同步更新「live df」
+                    # ✅ 載入後同步更新「live df」，確保 3D 計算讀到的是最新畫面資料
                     if df_key == 'df_box':
                         st.session_state['_box_live_df'] = df_loaded.copy()
                         st.session_state.pop('box_editor', None)
@@ -469,7 +461,9 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
 
                     st.success(f'已載入：{sel}')
 
+                    # ✅ 模板資料變動：清 cache，避免下次清單/內容不更新
                     _gas_cache_clear()
+
                     _force_rerun()
             except Exception as e:
                 st.error(f'載入解析失敗：{e}')
@@ -483,8 +477,6 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
             st.warning('請先輸入「另存為模板名稱」')
         else:
             _begin_loading('儲存模板中...')
-            # ✅ 關鍵：同一次 run 立即渲染 overlay（使用者才看得到）
-            st.markdown(_loading_overlay_html('儲存模板中...'), unsafe_allow_html=True)
             try:
                 ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
                 if ok:
@@ -503,8 +495,6 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
             st.warning('請先選擇要刪除的模板')
         else:
             _begin_loading('刪除模板中...')
-            # ✅ 關鍵：同一次 run 立即渲染 overlay（使用者才看得到）
-            st.markdown(_loading_overlay_html('刪除模板中...'), unsafe_allow_html=True)
             try:
                 ok, msg = gas.delete(sheet, del_sel)
                 if ok:
@@ -519,8 +509,8 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
                 _end_loading()
 
     st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
-    st.markdown('</div>', unsafe_allow_html=True)
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(結束)：------
+
 
 
 
