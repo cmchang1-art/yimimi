@@ -370,44 +370,45 @@ def box_table_block():
     st.markdown('### 箱型表格（勾選=參與計算；勾選後可刪除）')
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
 
-    df=_sanitize_box(st.session_state.df_box)
-    edited=st.data_editor(
-        df,
-        key='box_editor',
-        hide_index=True,
-        num_rows='dynamic',
-        use_container_width=True,
-        height=320,
-        column_config={
-            '選取': st.column_config.CheckboxColumn('選取'),
-            '名稱': st.column_config.TextColumn('名稱'),
-            '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
-            '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
-            '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
-            '數量': st.column_config.NumberColumn('數量', step=1),
-            '空箱重量': st.column_config.NumberColumn('空箱重量', step=0.01, format='%.2f')
-        }
-    )
+    df = _sanitize_box(st.session_state.df_box)
 
-    # 以 session_state 裡的最新 editor 值為準（避免按一次拿到舊資料）
-    current = st.session_state.get('box_editor', edited)
+    # 用 form 確保：按一次就執行、且拿到的是 data_editor 回傳的 DataFrame（不是 session_state dict）
+    with st.form(key="box_form", clear_on_submit=False):
+        edited = st.data_editor(
+            df,
+            key='box_editor',
+            hide_index=True,
+            num_rows='dynamic',
+            use_container_width=True,
+            height=320,
+            column_config={
+                '選取': st.column_config.CheckboxColumn('選取'),
+                '名稱': st.column_config.TextColumn('名稱'),
+                '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
+                '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
+                '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
+                '數量': st.column_config.NumberColumn('數量', step=1),
+                '空箱重量': st.column_config.NumberColumn('空箱重量', step=0.01, format='%.2f')
+            }
+        )
 
-    b1,b2,b3=st.columns([1,1,1],gap='medium')
-    with b1:
-        apply_btn=st.button('✅ 套用變更（外箱表格）', use_container_width=True, key='box_apply')
-    with b2:
-        del_btn=st.button('🗑️ 刪除勾選', use_container_width=True, key='box_del')
-    with b3:
-        clear_btn=st.button('🧹 清除全部外箱', use_container_width=True, key='box_clear')
+        b1, b2, b3 = st.columns([1,1,1], gap='medium')
+        with b1:
+            apply_btn = st.form_submit_button('✅ 套用變更（外箱表格）', use_container_width=True)
+        with b2:
+            del_btn = st.form_submit_button('🗑️ 刪除勾選', use_container_width=True)
+        with b3:
+            clear_btn = st.form_submit_button('🧹 清除全部外箱', use_container_width=True)
 
+    # --- 按鈕行為（注意：edited 這裡一定是 DataFrame） ---
     if apply_btn:
-        clean=_sanitize_box(current)
-        st.session_state.df_box=clean
+        clean = _sanitize_box(edited)
+        st.session_state.df_box = clean
 
         # 若已套用某個模板，套用變更就同步覆寫回資料庫
         if gas.ready and (st.session_state.get('active_box_tpl') or '').strip():
-            tpl=st.session_state['active_box_tpl']
-            ok,msg=gas.upsert(SHEET_BOX, tpl, _box_payload(clean))
+            tpl = st.session_state['active_box_tpl']
+            ok, msg = gas.upsert(SHEET_BOX, tpl, _box_payload(clean))
             if ok:
                 st.success(f'已套用並同步更新模板：{tpl}')
             else:
@@ -418,63 +419,61 @@ def box_table_block():
         _force_rerun()
 
     if del_btn:
-        d=_sanitize_box(current)
-        d=d[~d['選取']].reset_index(drop=True)
-        st.session_state.df_box=_sanitize_box(d)
+        d = _sanitize_box(edited)
+        d = d[~d['選取']].reset_index(drop=True)
+        st.session_state.df_box = _sanitize_box(d)
         st.success('已刪除勾選外箱')
         _force_rerun()
 
     if clear_btn:
         # 真正清空（不回填預設值）+ 清除套用狀態
-        st.session_state.df_box=pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
-        st.session_state.active_box_tpl=''
+        st.session_state.df_box = pd.DataFrame(columns=['選取','名稱','長','寬','高','數量','空箱重量'])
+        st.session_state.active_box_tpl = ''
         st.success('已清空全部外箱，並清除「目前套用」狀態')
         _force_rerun()
 #------A011：外箱表格 UI（Data Editor + 操作按鈕）(結束)：------
-
-
 
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(開始)：------
 def prod_table_block():
     st.markdown('### 商品表格（勾選=參與計算；勾選後可刪除）')
     st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
 
-    df=_sanitize_prod(st.session_state.df_prod)
-    edited=st.data_editor(
-        df,
-        key='prod_editor',
-        hide_index=True,
-        num_rows='dynamic',
-        use_container_width=True,
-        height=320,
-        column_config={
-            '選取': st.column_config.CheckboxColumn('選取'),
-            '商品名稱': st.column_config.TextColumn('商品名稱'),
-            '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
-            '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
-            '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
-            '重量(kg)': st.column_config.NumberColumn('重量(kg)', step=0.01, format='%.2f'),
-            '數量': st.column_config.NumberColumn('數量', step=1)
-        }
-    )
+    df = _sanitize_prod(st.session_state.df_prod)
 
-    current = st.session_state.get('prod_editor', edited)
+    with st.form(key="prod_form", clear_on_submit=False):
+        edited = st.data_editor(
+            df,
+            key='prod_editor',
+            hide_index=True,
+            num_rows='dynamic',
+            use_container_width=True,
+            height=320,
+            column_config={
+                '選取': st.column_config.CheckboxColumn('選取'),
+                '商品名稱': st.column_config.TextColumn('商品名稱'),
+                '長': st.column_config.NumberColumn('長', step=0.1, format='%.2f'),
+                '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
+                '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
+                '重量(kg)': st.column_config.NumberColumn('重量(kg)', step=0.01, format='%.2f'),
+                '數量': st.column_config.NumberColumn('數量', step=1)
+            }
+        )
 
-    b1,b2,b3=st.columns([1,1,1],gap='medium')
-    with b1:
-        apply_btn=st.button('✅ 套用變更（商品表格）', use_container_width=True, key='prod_apply')
-    with b2:
-        del_btn=st.button('🗑️ 刪除勾選', use_container_width=True, key='prod_del')
-    with b3:
-        clear_btn=st.button('🧹 清除全部商品', use_container_width=True, key='prod_clear')
+        b1, b2, b3 = st.columns([1,1,1], gap='medium')
+        with b1:
+            apply_btn = st.form_submit_button('✅ 套用變更（商品表格）', use_container_width=True)
+        with b2:
+            del_btn = st.form_submit_button('🗑️ 刪除勾選', use_container_width=True)
+        with b3:
+            clear_btn = st.form_submit_button('🧹 清除全部商品', use_container_width=True)
 
     if apply_btn:
-        clean=_sanitize_prod(current)
-        st.session_state.df_prod=clean
+        clean = _sanitize_prod(edited)
+        st.session_state.df_prod = clean
 
         if gas.ready and (st.session_state.get('active_prod_tpl') or '').strip():
-            tpl=st.session_state['active_prod_tpl']
-            ok,msg=gas.upsert(SHEET_PROD, tpl, _prod_payload(clean))
+            tpl = st.session_state['active_prod_tpl']
+            ok, msg = gas.upsert(SHEET_PROD, tpl, _prod_payload(clean))
             if ok:
                 st.success(f'已套用並同步更新模板：{tpl}')
             else:
@@ -485,18 +484,19 @@ def prod_table_block():
         _force_rerun()
 
     if del_btn:
-        d=_sanitize_prod(current)
-        d=d[~d['選取']].reset_index(drop=True)
-        st.session_state.df_prod=_sanitize_prod(d)
+        d = _sanitize_prod(edited)
+        d = d[~d['選取']].reset_index(drop=True)
+        st.session_state.df_prod = _sanitize_prod(d)
         st.success('已刪除勾選商品')
         _force_rerun()
 
     if clear_btn:
-        st.session_state.df_prod=pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
-        st.session_state.active_prod_tpl=''
+        st.session_state.df_prod = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
+        st.session_state.active_prod_tpl = ''
         st.success('已清空全部商品，並清除「目前套用」狀態')
         _force_rerun()
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(結束)：------
+
 
 
 
