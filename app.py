@@ -60,6 +60,20 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 
 
 #------A004：通用工具函式(含全頁防呆/待處理動作)(開始)：------
+def _to_float(x, default=0.0) -> float:
+    """給 _sanitize_box/_sanitize_prod 用：把各種輸入安全轉 float"""
+    try:
+        if x is None:
+            return float(default)
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip()
+        if s == "":
+            return float(default)
+        return float(s)
+    except Exception:
+        return float(default)
+
 def _force_rerun():
     try:
         st.rerun()
@@ -113,12 +127,6 @@ def _pop_action():
     return st.session_state.pop('_pending_action', None)
 
 def _handle_pending_action():
-    """
-    ⚠️ 注意：這裡完全不畫一般 UI，只做：
-    1) 全頁遮罩（不可點）
-    2) 做 GAS IO
-    3) 完成後 rerun 回正常畫面
-    """
     p = st.session_state.get('_pending_action')
     if not isinstance(p, dict):
         return
@@ -129,7 +137,6 @@ def _handle_pending_action():
     df_key = p.get('df_key')
     active_key = p.get('active_key')
 
-    # 先顯示遮罩（全頁不可點）
     _begin_loading('資料處理中...')
     _render_fullpage_overlay(_loading_msg())
 
@@ -142,7 +149,6 @@ def _handle_pending_action():
             if payload is None:
                 st.error('載入失敗：請確認雲端連線 / 權限')
             else:
-                # 依你檔案現有命名：_box_from / _prod_from
                 if df_key == 'df_box':
                     df_loaded = _box_from(payload)
                     df_loaded = _sanitize_box(df_loaded)
