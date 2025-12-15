@@ -47,35 +47,39 @@ st.markdown('''<style>
 
 
 
-#------A003：通用工具（時間/轉型/安全字串）(開始)：------
-def _now_tw() -> datetime:
-    """台灣時間 now()（避免 NameError）"""
-    return datetime.now(ZoneInfo("Asia/Taipei"))
+#------A003：Loading Watchdog（避免 loading 卡死）(開始)：------
+import time
+import streamlit as st
 
-def _to_float(x, default: float = 0.0) -> float:
-    """把各種輸入安全轉 float（支援 '', None, '1,234', ' 12 '）"""
-    try:
-        if x is None:
-            return default
-        if isinstance(x, (int, float)):
-            return float(x)
-        s = str(x).strip()
-        if s == "":
-            return default
-        s = s.replace(",", "")
-        return float(s)
-    except Exception:
-        return default
+def _loading_watchdog(timeout_sec: int = 60):
+    """
+    防止 busy/遮罩卡死：
+    - 如果 session_state['_busy'] 長時間為 True，代表上一輪可能中斷/例外沒清掉
+    - 超過 timeout_sec 就自動解除 busy 並清掉 pending action
+    """
+    now = time.monotonic()
 
-def _safe_name(s: str, fallback: str = "report") -> str:
-    """給檔名/模板名用：移除不合法字元"""
-    s = (s or "").strip()
-    if not s:
-        return fallback
-    s = re.sub(r"[\\/:*?\"<>|]+", "_", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s or fallback
-#------A003：通用工具（時間/轉型/安全字串）(結束)：------
+    # 初始化 timestamp
+    if "_busy_since" not in st.session_state:
+        st.session_state["_busy_since"] = None
+
+    # 若正在 busy，記錄開始時間
+    if st.session_state.get("_busy"):
+        if st.session_state["_busy_since"] is None:
+            st.session_state["_busy_since"] = now
+
+        # 超時就強制解除（避免全站一直不能操作）
+        if (now - st.session_state["_busy_since"]) > timeout_sec:
+            st.session_state["_busy"] = False
+            st.session_state["_busy_since"] = None
+            st.session_state["_pending_action"] = None
+            st.session_state["_pending_payload"] = {}
+            st.session_state["_pending_message"] = ""
+            # 這裡不要 st.rerun()，避免在 main 一開始就無限 rerun
+    else:
+        # 不 busy 就清掉 timestamp
+        st.session_state["_busy_since"] = None
+#------A003：Loading Watchdog（避免 loading 卡死）(結束)：------
 
 
 
