@@ -319,78 +319,185 @@ if GAS_URL:
 #------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(結束)：------
 
 
-#------A007：外箱資料清理/防呆(開始)：------
-def _to_float(x, default: float = 0.0) -> float:
-    """把各種輸入安全轉成 float；失敗回傳 default。"""
+#------A007：Action Queue + Busy 防呆遮罩（完整工具組）(開始)：------
+import time
+import html
+import streamlit as st
+
+# ==============
+# 狀態 key 統一
+# ==============
+_SS_BUSY = "__busy"
+_SS_ACTION = "__action"          # 目前要執行的 action 名稱
+_SS_ACTION_MSG = "__action_msg"  # 遮罩訊息
+_SS_RENDER_NONCE = "__render_nonce"  # 用於產生唯一 key，避免 DuplicateElementId
+
+
+def _ensure_action_system():
+    """確保 session_state 有需要的欄位。"""
+    if _SS_BUSY not in st.session_state:
+        st.session_state[_SS_BUSY] = False
+    if _SS_ACTION not in st.session_state:
+        st.session_state[_SS_ACTION] = None
+    if _SS_ACTION_MSG not in st.session_state:
+        st.session_state[_SS_ACTION_MSG] = ""
+    if _SS_RENDER_NONCE not in st.session_state:
+        st.session_state[_SS_RENDER_NONCE] = 0
+
+
+def _is_busy() -> bool:
+    _ensure_action_system()
+    return bool(st.session_state.get(_SS_BUSY, False))
+
+
+def _set_busy(flag: bool, msg: str = ""):
+    _ensure_action_system()
+    st.session_state[_SS_BUSY] = bool(flag)
+    if msg is not None:
+        st.session_state[_SS_ACTION_MSG] = str(msg)
+
+
+def _bump_render_nonce():
+    _ensure_action_system()
+    st.session_state[_SS_RENDER_NONCE] = int(st.session_state[_SS_RENDER_NONCE]) + 1
+
+
+def _get_render_nonce() -> int:
+    _ensure_action_system()
+    return int(st.session_state[_SS_RENDER_NONCE])
+
+
+def _trigger(action_name: str, msg: str = "處理中..."):
+    """
+    觸發一個 action：
+    1) 設定 busy + action
+    2) bump nonce（避免舊 key）
+    3) rerun，讓畫面先切到「遮罩狀態」
+    """
+    _ensure_action_system()
+    st.session_state[_SS_ACTION] = str(action_name)
+    _set_busy(True, msg)
+    _bump_render_nonce()
+    st.rerun()
+
+
+def _has_action() -> bool:
+    _ensure_action_system()
+    return st.session_state.get(_SS_ACTION) is not None
+
+
+def _pop_action():
+    """取出 action，並清空 action（避免重複執行）。"""
+    _ensure_action_system()
+    a = st.session_state.get(_SS_ACTION)
+    st.session_state[_SS_ACTION] = None
+    return a
+
+
+def _render_fullpage_overlay():
+    """
+    全頁遮罩（CSS/HTML），用來阻擋點擊。
+    注意：Streamlit 長任務時，前端更新仍取決於 rerun 的時機；
+    本工具搭配 _trigger() 的 rerun，確保按鈕按下後「下一輪」先看到遮罩。
+    """
+    _ensure_action_system()
+    if not _is_busy():
+        return
+
+    msg = html.escape(st.session_state.get(_SS_ACTION_MSG, "處理中..."))
+    st.markdown(
+        f"""
+        <style>
+        .yimimi-overlay {{
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            background: rgba(255,255,255,0.80);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(1px);
+        }}
+        .yimimi-overlay-card {{
+            background: white;
+            border: 1px solid rgba(0,0,0,0.10);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+            border-radius: 12px;
+            padding: 18px 18px;
+            min-width: 320px;
+            max-width: 520px;
+            text-align: center;
+        }}
+        .yimimi-overlay-title {{
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }}
+        .yimimi-overlay-sub {{
+            font-size: 13px;
+            opacity: .75;
+        }}
+        .yimimi-overlay-spinner {{
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            border: 4px solid rgba(0,0,0,0.12);
+            border-top-color: rgba(0,0,0,0.55);
+            margin: 0 auto 10px auto;
+            animation: yimimi-spin 0.9s linear infinite;
+        }}
+        @keyframes yimimi-spin {{
+            to {{ transform: rotate(360deg); }}
+        }}
+        </style>
+
+        <div class="yimimi-overlay">
+            <div class="yimimi-overlay-card">
+                <div class="yimimi-overlay-spinner"></div>
+                <div class="yimimi-overlay-title">{msg}</div>
+                <div class="yimimi-overlay-sub">請稍候，完成後會自動恢復操作</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+def _handle_action(action_map: dict):
+    """
+    在「新的一輪 rerun」最上方呼叫它：
+    - 若有 action：先渲染遮罩，再執行工作
+    - 工作完成：busy=False + bump nonce + rerun
+    """
+    _ensure_action_system()
+
+    if not _has_action():
+        return
+
+    # 取出這輪要做的 action
+    act = _pop_action()
+    fn = action_map.get(act)
+
+    # 先顯示遮罩（這輪一開始就渲染）
+    _render_fullpage_overlay()
+
+    # 執行工作（耗時）
     try:
-        if x is None:
-            return float(default)
-        # bool 要先處理，不然 True/False 會變 1/0 但常常不是你要的
-        if isinstance(x, bool):
-            return 1.0 if x else 0.0
-        if isinstance(x, (int, float)):
-            return float(x)
-
-        s = str(x).strip()
-        if s == "" or s.lower() in ("nan", "none"):
-            return float(default)
-
-        # 常見：1,234.5
-        s = s.replace(",", "")
-        return float(s)
-    except Exception:
-        return float(default)
-
-
-def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
-    cols = ["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]
-
-    if df is None:
-        df = pd.DataFrame(columns=cols)
-
-    df = df.copy()
-
-    # 補齊欄位
-    for c in cols:
-        if c not in df.columns:
-            df[c] = "" if c == "名稱" else 0
-
-    # 只保留需要欄位，空值處理
-    df = df[cols].fillna("")
-
-    # 空表就直接回傳空表（不要強塞預設值）
-    if df.empty:
-        return pd.DataFrame(columns=cols)
-
-    # 型別整理
-    df["選取"] = df["選取"].astype(bool)
-    df["名稱"] = df["名稱"].astype(str).fillna("").map(lambda s: s.strip())
-
-    for c in ["長", "寬", "高", "空箱重量"]:
-        df[c] = df[c].apply(lambda v: _to_float(v, 0.0))
-
-    df["數量"] = df["數量"].apply(lambda v: int(_to_float(v, 0.0)))
-    df.loc[df["數量"] < 0, "數量"] = 0
-
-    # 過濾完全空白列
-    def _is_empty_row(r) -> bool:
-        return (
-            (not r["名稱"])
-            and float(r["長"]) == 0.0
-            and float(r["寬"]) == 0.0
-            and float(r["高"]) == 0.0
-            and int(r["數量"]) == 0
-            and float(r["空箱重量"]) == 0.0
-        )
-
-    df = df[~df.apply(_is_empty_row, axis=1)].reset_index(drop=True)
-
-    # 清理完如果變空，也保持空（不回填預設）
-    if df.empty:
-        return pd.DataFrame(columns=cols)
-
-    return df
-#------A007：外箱資料清理/防呆(結束)：------
+        if fn is not None:
+            with st.spinner(st.session_state.get(_SS_ACTION_MSG, "處理中...")):
+                fn()
+        else:
+            # 找不到對應 action，也要解除 busy，避免卡死
+            st.warning(f"找不到 action：{act}")
+    except Exception as e:
+        # 這裡不要吞錯，顯示錯誤給你看（不然又變白畫面不好查）
+        st.exception(e)
+    finally:
+        # 結束：解除 busy，並 rerun 讓 UI 用最新 state 重畫
+        _set_busy(False, "")
+        _bump_render_nonce()
+        st.rerun()
+#------A007：Action Queue + Busy 防呆遮罩（完整工具組）(結束)：------
 
 
 
