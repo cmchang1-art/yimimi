@@ -575,15 +575,12 @@ def prod_table_block():
 
 
 #------A013：外箱選擇/商品展開為 Item(開始)：------
-def _build_bins(df_box: pd.DataFrame) -> List[Dict[str,Any]]:
-    """
-    回傳所有勾選且數量>0的箱子，並展開數量（qty=3 就會產生 3 個 bin 設定）。
-    """
+def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
     bins=[]
     for _,r in df_box.iterrows():
         if not bool(r.get('選取', False)):
             continue
-        qty=int(r.get('數量', 0) or 0)
+        qty=int(r.get('數量',0) or 0)
         if qty<=0:
             continue
         L=float(r.get('長',0) or 0)
@@ -591,12 +588,10 @@ def _build_bins(df_box: pd.DataFrame) -> List[Dict[str,Any]]:
         H=float(r.get('高',0) or 0)
         if L<=0 or W<=0 or H<=0:
             continue
-
-        name=str(r.get('名稱','') or '外箱').strip() or '外箱'
+        name=(str(r.get('名稱','') or '').strip() or '外箱')
         tare=float(r.get('空箱重量',0) or 0)
-
         for i in range(qty):
-            bins.append({'name':name, 'l':L, 'w':W, 'h':H, 'tare':tare})
+            bins.append({'name':name,'l':L,'w':W,'h':H,'tare':tare})
     return bins
 
 def _build_items(df_prod:pd.DataFrame)->List[Item]:
@@ -604,7 +599,7 @@ def _build_items(df_prod:pd.DataFrame)->List[Item]:
     for _,r in df_prod.iterrows():
         if not bool(r.get('選取', False)):
             continue
-        qty=int(r.get('數量', 0) or 0)
+        qty=int(r.get('數量',0) or 0)
         if qty<=0:
             continue
         L=float(r.get('長',0) or 0)
@@ -612,63 +607,64 @@ def _build_items(df_prod:pd.DataFrame)->List[Item]:
         H=float(r.get('高',0) or 0)
         if L<=0 or W<=0 or H<=0:
             continue
-
-        nm=str(r.get('商品名稱','') or '商品').strip() or '商品'
+        nm=(str(r.get('商品名稱','') or '').strip() or '商品')
         wt=float(r.get('重量(kg)',0) or 0)
-
         for i in range(qty):
             items.append(Item(f"{nm}_{i+1}", L, W, H, wt))
     return items
 #------A013：外箱選擇/商品展開為 Item(結束)：------
 
 
+
 #------A014：3D 圖表建立（Plotly）(開始)：------
 def build_3d_fig(box:Dict[str,Any], fitted:List[Item])->go.Figure:
-    palette=['#2F3A4A','#4C6A92','#6C757D','#8E9AAF','#A3B18A','#B08968','#C9ADA7','#6D6875']
     fig=go.Figure()
+    palette=['#2F3A4A','#4C6A92','#6C757D','#8E9AAF','#A3B18A','#B08968','#C9ADA7','#6D6875']
 
-    # 這裡統一：x=長(l)、y=寬(w)、z=高(h)
-    L,W,H=float(box['l']),float(box['w']),float(box['h'])
+    # 統一座標：x=長(L), y=寬(W), z=高(H)
+    L=float(box['l']); W=float(box['w']); H=float(box['h'])
 
-    # 外箱邊框
+    # 外箱框線
     edges=[((0,0,0),(L,0,0)),((L,0,0),(L,W,0)),((L,W,0),(0,W,0)),((0,W,0),(0,0,0)),
            ((0,0,H),(L,0,H)),((L,0,H),(L,W,H)),((L,W,H),(0,W,H)),((0,W,H),(0,0,H)),
            ((0,0,0),(0,0,H)),((L,0,0),(L,0,H)),((L,W,0),(L,W,H)),((0,W,0),(0,W,H))]
     for a,b in edges:
         fig.add_trace(go.Scatter3d(
             x=[a[0],b[0]],y=[a[1],b[1]],z=[a[2],b[2]],
-            mode='lines',
-            line=dict(width=4,color='#333'),
-            hoverinfo='skip',
-            showlegend=False
+            mode='lines', line=dict(width=5,color='#111'),
+            hoverinfo='skip', showlegend=False
         ))
 
-    # 同品項同色：去掉 _1/_2 的序號
-    color_map={}
-    color_i=0
-
+    # 同品項同色（去掉 _序號）
     def _base_name(n:str)->str:
         n=str(n or '')
         return n.rsplit('_',1)[0] if '_' in n else n
 
+    color_map={}
+    ci=0
     for it in fitted:
         base=_base_name(getattr(it,'name',''))
         if base not in color_map:
-            color_map[base]=palette[color_i%len(palette)]
-            color_i += 1
+            color_map[base]=palette[ci%len(palette)]
+            ci += 1
 
-    # 畫每個商品（實心、不透明、加邊框）
+    def _rot_dim(it:Item):
+        # ✅ py3dbp 旋轉後尺寸
+        if hasattr(it,'get_dimension'):
+            d=it.get_dimension()  # (w,h,d) in py3dbp
+            return float(d[0]),float(d[1]),float(d[2])
+        return float(it.width),float(it.height),float(it.depth)
+
+    # 畫商品：實心、不透明、加邊框
     for it in fitted:
         name=str(getattr(it,'name',''))
         base=_base_name(name)
         c=color_map.get(base, palette[0])
 
-        px,py,pz=[_to_float(v) for v in getattr(it,'position',[0,0,0])]
+        px,py,pz=[float(v) for v in (getattr(it,'position',[0,0,0]) or [0,0,0])]
+        dx,dy,dz=_rot_dim(it)
 
-        # ✅ 修正：py3dbp 物件的尺寸欄位就是 width/height/depth
-        dx,dy,dz=float(it.width),float(it.height),float(it.depth)
-
-        # 8 個頂點
+        # 8頂點
         vx=[px,px+dx,px+dx,px,px,px+dx,px+dx,px]
         vy=[py,py,py+dy,py+dy,py,py,py+dy,py+dy]
         vz=[pz,pz,pz,pz,pz+dz,pz+dz,pz+dz,pz+dz]
@@ -677,40 +673,35 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item])->go.Figure:
                (1,2,6),(1,6,5),(2,3,7),(2,7,6),(3,0,4),(3,4,7)]
         I,J,K=zip(*faces)
 
-        # 實心方塊（不透明）
         fig.add_trace(go.Mesh3d(
-            x=vx,y=vy,z=vz,
-            i=I,j=J,k=K,
-            opacity=1.0,
-            color=c,
-            flatshading=True,
+            x=vx,y=vy,z=vz, i=I,j=J,k=K,
+            color=c, opacity=1.0, flatshading=True,
             hovertemplate=f"{base}<br>尺寸:{dx:.1f}×{dy:.1f}×{dz:.1f}<extra></extra>",
             showlegend=False
         ))
 
-        # 邊框線（黑色線條區分）
+        # 邊框線（清楚分隔，不透明）
         item_edges=[(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
         for a,b in item_edges:
             fig.add_trace(go.Scatter3d(
                 x=[vx[a],vx[b]],y=[vy[a],vy[b]],z=[vz[a],vz[b]],
-                mode='lines',
-                line=dict(width=3,color='#111'),
-                hoverinfo='skip',
-                showlegend=False
+                mode='lines', line=dict(width=3,color='#000'),
+                hoverinfo='skip', showlegend=False
             ))
 
     fig.update_layout(
         scene=dict(
-            xaxis=dict(range=[0,L], title='長'),
-            yaxis=dict(range=[0,W], title='寬'),
-            zaxis=dict(range=[0,H], title='高'),
+            xaxis=dict(range=[0,L], title='長 (L)'),
+            yaxis=dict(range=[0,W], title='寬 (W)'),
+            zaxis=dict(range=[0,H], title='高 (H)'),
             aspectmode='data'
         ),
         margin=dict(l=0,r=0,t=0,b=0),
-        height=520
+        height=560
     )
     return fig
 #------A014：3D 圖表建立（Plotly）(結束)：------
+
 
 
 #------A015：HTML 報告輸出（含 Plotly 內嵌）(開始)：------
@@ -765,20 +756,25 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
     if not items:
         return {'ok':False,'error':'請至少勾選 1 個商品（且數量>0、尺寸>0）'}
 
-    # ✅ 人類裝箱：先用大箱，再用小箱
-    def _vol(b): 
-        return float(b['l']*b['w']*b['h'])
-    bins_sorted = sorted(list(bins), key=_vol, reverse=True)
+    # 大箱優先（人類直覺）
+    def _vol(b): return float(b['l']*b['w']*b['h'])
+    bins_sorted=sorted(bins, key=_vol, reverse=True)
 
-    remaining = list(items)
-    packed_bins = []   # 每箱結果：{'box':box_meta,'bin_name':..., 'fitted':[...]}
+    def _rot_dim(it:Item):
+        if hasattr(it,'get_dimension'):
+            d=it.get_dimension()
+            return float(d[0]),float(d[1]),float(d[2])
+        return float(it.width),float(it.height),float(it.depth)
+
+    remaining=list(items)
+    packed=[]  # [{'box':..., 'name':..., 'items':[Item...]}]
 
     for i,b in enumerate(bins_sorted, start=1):
         if not remaining:
             break
 
-        packer = Packer()
-        # 統一：Bin(width=l, height=w, depth=h) => x=l, y=w, z=h
+        packer=Packer()
+        # 統一：Bin(width=L, height=W, depth=H) 對應 x,y,z
         packer.add_bin(Bin(f"{b['name']}#{i}", float(b['l']), float(b['w']), float(b['h']), 999999))
         for it in remaining:
             packer.add_item(it)
@@ -788,69 +784,54 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
         except TypeError:
             packer.pack()
 
-        b0 = packer.bins[0]
-        fitted = list(getattr(b0,'items',[]) or [])
-        unfitted = list(getattr(b0,'unfitted_items',[]) or [])
+        bb=packer.bins[0]
+        fitted=list(getattr(bb,'items',[]) or [])
+        unfitted=list(getattr(bb,'unfitted_items',[]) or [])
 
         if fitted:
-            packed_bins.append({
-                'box': b,
-                'bin_name': b0.name,
-                'fitted': fitted
-            })
+            packed.append({'box':b, 'name':bb.name, 'items':fitted})
 
-        remaining = unfitted
+        remaining=unfitted
 
-    # 最後剩下的就是裝不下
-    uniq_unfitted = remaining
-
-    # 合併 fitted
-    all_fitted=[]
-    for pb in packed_bins:
-        all_fitted.extend(pb['fitted'])
+    unfitted=remaining
+    all_fitted=[it for p in packed for it in p['items']]
 
     # 重量
-    content_wt = sum(_to_float(getattr(it,'weight',0)) for it in all_fitted)
-    tare_total = sum(_to_float(pb['box'].get('tare',0)) for pb in packed_bins)
-    total_wt = content_wt + tare_total
+    content_wt=sum(float(getattr(it,'weight',0) or 0) for it in all_fitted)
+    tare_total=sum(float(p['box'].get('tare',0) or 0) for p in packed)
+    total_wt=content_wt+tare_total
 
-    # 利用率（以「實際用到的箱子」總體積做分母）
-    used_vol = sum(_to_float(it.width)*_to_float(it.height)*_to_float(it.depth) for it in all_fitted)
-    used_box_vol = sum(float(pb['box']['l']*pb['box']['w']*pb['box']['h']) for pb in packed_bins)
-    util = (used_vol/used_box_vol*100.0) if used_box_vol>0 else 0.0
+    # 利用率（以實際用到的箱子體積為分母）
+    used_item_vol=sum((_rot_dim(it)[0]*_rot_dim(it)[1]*_rot_dim(it)[2]) for it in all_fitted)
+    used_box_vol=sum(float(p['box']['l']*p['box']['w']*p['box']['h']) for p in packed)
+    util=(used_item_vol/used_box_vol*100.0) if used_box_vol>0 else 0.0
+    util=max(0.0, min(100.0, util))
 
-    # ✅ 嚴格保護：避免顯示 >100%（正常情況不會發生，若發生代表資料/維度異常）
-    if util < 0: util = 0.0
-    if util > 100: util = 100.0
-
-    # 3D：預設顯示第一個有裝到的箱子
-    if packed_bins:
-        first_box = packed_bins[0]['box']
-        first_fitted = packed_bins[0]['fitted']
-        fig = build_3d_fig(first_box, first_fitted)
-        html = build_report_html(order_name, first_box, first_fitted, uniq_unfitted, content_wt, total_wt, util, fig)
+    # 預設顯示第一個有裝到的箱子
+    if packed:
+        first_box=packed[0]['box']
+        first_items=packed[0]['items']
+        fig=build_3d_fig(first_box, first_items)
+        html=build_report_html(order_name, first_box, first_items, unfitted, content_wt, total_wt, util, fig)
     else:
-        fig = go.Figure()
-        html = build_report_html(order_name, bins_sorted[0], [], uniq_unfitted, 0.0, 0.0, 0.0, fig)
+        fig=go.Figure()
+        html=build_report_html(order_name, bins_sorted[0], [], unfitted, 0.0, 0.0, 0.0, fig)
 
-    # 為了 A018 的下拉選箱 3D：輸出「實際用到的箱子清單」與其 fitted
-    bins_input_for_ui = [pb['box'] for pb in packed_bins]
-    packer_bins_for_ui = []
-    # 這裡用簡單的物件結構模擬原本 A018 需要的 .name/.items
+    # 給 UI 下拉：做一個最小 bin 物件（要有 .name / .items）
     class _MiniBin:
         def __init__(self, name, items):
             self.name=name
             self.items=items
-    for pb in packed_bins:
-        packer_bins_for_ui.append(_MiniBin(pb['bin_name'], pb['fitted']))
+
+    packer_bins=[_MiniBin(p['name'], p['items']) for p in packed]
+    bins_input=[p['box'] for p in packed]
 
     return {
         'ok':True,
-        'bins_input': bins_input_for_ui,        # 只包含「實際用到的箱子」(依大到小、依裝箱順序)
-        'packer_bins': packer_bins_for_ui,      # 對應 bins_input，內含 items
-        'used_bin_count': len(packed_bins),
-        'fitted_all': all_fitted,
-        'unfitted': uniq_unfitted,
+        'bins_input': bins_input,        # ✅ 這次實際用到的箱子（順序=裝箱順序）
+        'packer_bins': packer_bins,      # ✅ 每箱裝了哪些 items
+        'used_bin_count': len(packed),
+        'unfitted': unfitted,
         'content_wt': content_wt,
         'total_wt': total_wt,
         'util': util,
@@ -858,6 +839,7 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
         'report_html': html
     }
 #------A016：裝箱計算核心（py3dbp）+ 統計(結束)：------
+
 
 
 
