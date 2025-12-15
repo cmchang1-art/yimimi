@@ -371,7 +371,7 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         new_name=st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new')
         save_btn=st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save')
 
-    # 先處理動作，再顯示目前套用（這樣才會即時更新）
+    # 先處理動作，再顯示目前套用（才會即時更新）
     if load_btn:
         if sel=='(無)':
             st.warning('請先選擇要載入的模板')
@@ -383,6 +383,13 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
                 try:
                     st.session_state[df_key]=from_payload(payload)
                     st.session_state[active_key]=sel
+
+                    # ✅ 關鍵：載入模板後清掉 data_editor 的殘留狀態，避免影響開始計算/勾選判斷
+                    if df_key == 'df_box':
+                        st.session_state.pop('box_editor', None)
+                    if df_key == 'df_prod':
+                        st.session_state.pop('prod_editor', None)
+
                     st.success(f'已載入：{sel}')
                     _force_rerun()
                 except Exception as e:
@@ -416,6 +423,7 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
 
     st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(結束)：------
+
 
 
 
@@ -739,16 +747,21 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
-        # ✅ 這裡改成：把 data_editor 的變更狀態套回 DataFrame（不必先按「套用變更」）
-        try:
-            df_box_live = _apply_editor_state(st.session_state.df_box, st.session_state.get('box_editor'))
-            df_prod_live = _apply_editor_state(st.session_state.df_prod, st.session_state.get('prod_editor'))
 
-            st.session_state.df_box = _sanitize_box(df_box_live)
-            st.session_state.df_prod = _sanitize_prod(df_prod_live)
-        except Exception:
-            # 就算出錯也不要中斷
-            pass
+        # ✅ 關鍵：只在 editor 值真的是 DataFrame 才使用它；否則用 df_box/df_prod（模板/套用後的正確值）
+        df_box_src = st.session_state.df_box
+        df_prod_src = st.session_state.df_prod
+
+        be = st.session_state.get('box_editor', None)
+        pe = st.session_state.get('prod_editor', None)
+
+        if isinstance(be, pd.DataFrame):
+            df_box_src = be
+        if isinstance(pe, pd.DataFrame):
+            df_prod_src = pe
+
+        st.session_state.df_box = _sanitize_box(df_box_src)
+        st.session_state.df_prod = _sanitize_prod(df_prod_src)
 
         with st.spinner('計算中...'):
             st.session_state.last_result = pack_and_render(
@@ -763,60 +776,31 @@ def result_block():
     if not res:
         return
     if not res.get('ok'):
-        st.error(res.get('error', '計算失敗'))
+        st.error(res.get('error','計算失敗'))
         return
 
     box = res['box']
+    st.markdown('<div class="soft-title">裝箱結果</div>', unsafe_allow_html=True)
+    st.write(f"訂單：{st.session_state.order_name}")
+    st.write(f"使用外箱：{box['name']}（{box['l']}×{box['w']}×{box['h']}）× 1 箱")
+    st.write(f"內容淨重：{res['content_wt']:.2f} kg")
+    st.write(f"本次總重：{res['total_wt']:.2f} kg")
+    st.write(f"空間利用率：{res['util']:.2f}%")
 
-    # ===== 圖2那種「報告式」UI =====
-    st.markdown("### 🧾 訂單裝箱報告")
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
-
-    # 左側條列資訊（模擬圖2）
-    st.markdown(
-        f"""
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <div>🧾 <b>訂單名稱</b>　<span style="color:#1f6feb;font-weight:800">{st.session_state.order_name}</span></div>
-          <div>🕒 <b>計算時間</b>　{_now_tw().strftime('%Y-%m-%d %H:%M:%S (台灣時間)')}</div>
-          <div>📦 <b>使用外箱</b>　{box['name']}（{box['l']}×{box['w']}×{box['h']}）× 1 箱</div>
-          <div>⚖️ <b>內容淨重</b>　{res['content_wt']:.2f} kg</div>
-          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{res['total_wt']:.2f} kg</span></div>
-          <div>📊 <b>空間利用率</b>　{res['util']:.2f}%</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # 裝不下提示（做成圖2那種警示條）
     if res['unfitted']:
-        counts = {}
+        counts={}
         for it in res['unfitted']:
-            base = str(it.name).split('_')[0]
-            counts[base] = counts.get(base, 0) + 1
-
-        st.markdown(
-            """
-            <div style="margin-top:12px;border:1px solid #f2b8b5;background:#fdecea;padding:10px 12px;border-radius:10px">
-              ❌ <b>注意：</b>有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        for k, v in counts.items():
-            st.markdown(
-                f"""
-                <div style="margin-top:8px;border:1px solid #f2b8b5;background:#fdecea;padding:8px 12px;border-radius:10px">
-                  ⚠️ <b>{k}</b>：超過 <b>{v}</b> 個
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            base=str(it.name).split('_')[0]
+            counts[base]=counts.get(base,0)+1
+        st.warning('注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）')
+        for k,v in counts.items():
+            st.error(f"{k}：超過 {v} 個")
 
     st.markdown('</div>', unsafe_allow_html=True)
+    st.plotly_chart(res['fig'], use_container_width=True)
 
-    # 下載按鈕（放在報告下方，像圖2）
-    ts = _now_tw().strftime('%Y%m%d_%H%M')
-    fname = f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
+    ts=_now_tw().strftime('%Y%m%d_%H%M')
+    fname=f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
     st.download_button(
         '⬇️ 下載完整裝箱報告（.html）',
         data=res['report_html'].encode('utf-8'),
@@ -825,10 +809,8 @@ def result_block():
         use_container_width=True,
         key='dl_report'
     )
-
-    # 3D 圖（放在最下方）
-    st.plotly_chart(res['fig'], use_container_width=True)
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
+
 
 
 
