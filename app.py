@@ -79,94 +79,102 @@ def _safe_name(s: str, fallback: str = "report") -> str:
 
 
 
-#------A004：全頁防呆遮罩（loading overlay + watchdog 防白屏）(開始)：------
+#------A004：共用工具/Action/Overlay（必裝）(開始)：------
 import time
+import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import streamlit as st
 
-def _is_loading() -> bool:
-    # ✅ 嚴格只接受 True，避免 "True"/1/None 亂入造成誤判
-    return st.session_state.get("_loading", False) is True
+def _now_tw() -> datetime:
+    """台灣時間 now。"""
+    return datetime.now(ZoneInfo("Asia/Taipei"))
 
-def _set_loading(flag: bool, msg: str = "資料處理中..."):
-    st.session_state["_loading"] = (flag is True)
-    st.session_state["_loading_msg"] = msg or "資料處理中..."
-    if flag is True:
-        st.session_state["_loading_since"] = time.time()
-    else:
-        st.session_state.pop("_loading_since", None)
-
-def _loading_msg() -> str:
-    return str(st.session_state.get("_loading_msg") or "資料處理中...")
-
-def _loading_watchdog(timeout_sec: int = 60):
+def _get_render_nonce() -> str:
     """
-    ✅ 防止卡死白屏：如果 loading 超過 timeout_sec，強制解除
+    取得「本次 rerun」用的唯一 nonce（避免 plotly 重複 element id）。
+    每次 rerun 都會變，確保 st.plotly_chart(key=...) 不重複。
     """
-    if not _is_loading():
+    if "_render_nonce" not in st.session_state:
+        st.session_state["_render_nonce"] = uuid.uuid4().hex[:10]
+    return st.session_state["_render_nonce"]
+
+def _bump_render_nonce():
+    """強制換 nonce（例如按鈕觸發後想保證下一輪 key 完全不同）。"""
+    st.session_state["_render_nonce"] = uuid.uuid4().hex[:10]
+
+# ===== 真・防呆 Action 機制（按下按鈕 → 下一輪才做耗時工作）=====
+def _trigger(action: str, message: str = "處理中，請稍候..."):
+    st.session_state["_pending_action"] = action
+    st.session_state["_pending_payload"] = {}
+    st.session_state["_pending_message"] = message
+    st.session_state["_busy"] = True
+    _bump_render_nonce()          # 避免 UI 元件 key 重複
+    st.rerun()                    # 立刻 rerun → 下一輪顯示遮罩並執行
+
+def _has_action() -> bool:
+    return bool(st.session_state.get("_pending_action"))
+
+def _consume_action():
+    act = st.session_state.get("_pending_action")
+    payload = st.session_state.get("_pending_payload") or {}
+    msg = st.session_state.get("_pending_message") or "處理中，請稍候..."
+    st.session_state["_pending_action"] = None
+    st.session_state["_pending_payload"] = {}
+    return act, payload, msg
+
+def _render_fullpage_overlay(msg: str):
+    """
+    全頁遮罩（真防呆）：使用者看得到 + 也真的不能操作（至少視覺上與點擊上）。
+    Streamlit 沒有真正 global disable，遮罩是最穩的做法。
+    """
+    st.markdown(
+        f"""
+        <style>
+        ._oai_overlay {{
+            position: fixed; inset: 0;
+            background: rgba(255,255,255,0.75);
+            z-index: 999999;
+            display:flex; align-items:center; justify-content:center;
+            pointer-events: all;
+        }}
+        ._oai_overlay .box {{
+            background:#fff; border:1px solid #e5e7eb;
+            border-radius:12px; padding:18px 22px;
+            box-shadow:0 10px 30px rgba(0,0,0,0.10);
+            font-size:16px;
+        }}
+        </style>
+        <div class="_oai_overlay">
+          <div class="box">⏳ {msg}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def _handle_action(handler_map: dict):
+    """
+    必須在 main() 的很前面呼叫：
+    - 先顯示遮罩
+    - 再執行耗時動作
+    - 做完解除 busy
+    - 再 rerun 讓畫面「確定更新完」才解除遮罩
+    """
+    if not _has_action():
         return
-    since = st.session_state.get("_loading_since", None)
-    if since is None:
-        # 沒有時間戳也別卡住
-        _set_loading(False, "")
-        return
-    if time.time() - float(since) > float(timeout_sec):
-        st.session_state["_last_3d_error"] = "系統偵測到操作逾時，已自動解除讀取鎖定（請再試一次）。"
-        _set_loading(False, "")
 
-def _overlay_html(msg: str) -> str:
-    m = msg or "資料處理中..."
-    # ✅ 遮罩一定看得到，不會「白白一片」
-    return f"""
-    <style>
-      .fullpage-overlay {{
-        position: fixed; inset: 0;
-        background: rgba(255,255,255,.72);
-        z-index: 999999;
-        display: flex; align-items: center; justify-content: center;
-        pointer-events: all;
-      }}
-      .fullpage-box {{
-        min-width: 260px;
-        padding: 16px 20px;
-        border-radius: 14px;
-        border: 1px solid rgba(0,0,0,.10);
-        background: rgba(255,255,255,.95);
-        box-shadow: 0 8px 28px rgba(0,0,0,.12);
-        color: rgba(0,0,0,.85);
-        font-size: 16px;
-        line-height: 1.4;
-        text-align: center;
-      }}
-      .fullpage-sub {{
-        margin-top: 8px;
-        font-size: 12px;
-        color: rgba(0,0,0,.55);
-      }}
-      .fullpage-spin {{
-        display:inline-block;
-        width:18px;height:18px;
-        border:2px solid rgba(0,0,0,.18);
-        border-top-color: rgba(0,0,0,.55);
-        border-radius: 50%;
-        animation: spin 0.9s linear infinite;
-        vertical-align: -3px;
-        margin-right: 8px;
-      }}
-      @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-    </style>
-    <div class="fullpage-overlay">
-      <div class="fullpage-box">
-        <span class="fullpage-spin"></span>{html.escape(m)}
-        <div class="fullpage-sub">請稍候，完成後才能繼續操作</div>
-      </div>
-    </div>
-    """
+    act, payload, msg = _consume_action()
+    _render_fullpage_overlay(msg)
 
-def _render_fullpage_overlay():
-    # ✅ 每次 render 前先跑 watchdog，避免卡住白屏
-    _loading_watchdog(timeout_sec=60)
-    if _is_loading():
-        st.markdown(_overlay_html(_loading_msg()), unsafe_allow_html=True)
-#------A004：全頁防呆遮罩（loading overlay + watchdog 防白屏）(結束)：------
+    try:
+        fn = handler_map.get(act)
+        if fn:
+            fn(payload)
+    finally:
+        st.session_state["_busy"] = False
+        _bump_render_nonce()
+        st.rerun()
+#------A004：共用工具/Action/Overlay（必裝）(結束)：------
 
 
 #------A005：全頁讀取遮罩防呆（立刻顯示 + 禁止操作）(開始)：------
@@ -319,154 +327,60 @@ if GAS_URL:
 #------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(結束)：------
 
 
-#------A007：全域防呆遮罩 + Action 兩段式觸發器（真防呆/避免NameError）(開始)：------
-import time
-import uuid
-from typing import Callable, Dict, Any, Optional
+#------A007：外箱資料清理/防呆(開始)：------
+import pandas as pd
 
-def _ensure_busy_state():
-    if "_ui_busy" not in st.session_state:
-        st.session_state._ui_busy = {
-            "busy": False,
-            "msg": "",
-            "since": 0.0,
-            "token": "",
-        }
-    if "_action_queue" not in st.session_state:
-        st.session_state._action_queue = None
-    if "_render_nonce" not in st.session_state:
-        st.session_state._render_nonce = 0
+def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
+    cols = ['選取','名稱','長','寬','高','數量','空箱重量']
 
-def _set_busy(is_busy: bool, msg: str = ""):
-    _ensure_busy_state()
-    st.session_state._ui_busy["busy"] = bool(is_busy)
-    st.session_state._ui_busy["msg"] = msg or ""
-    st.session_state._ui_busy["since"] = time.time() if is_busy else 0.0
-    st.session_state._ui_busy["token"] = uuid.uuid4().hex if is_busy else ""
+    # 兜底：避免你漏了 _to_float 造成 NameError
+    _to_float_global = globals().get("_to_float")
+    def _to_float_local(x, default=0.0):
+        try:
+            if x is None: return float(default)
+            s = str(x).strip().replace(",", "")
+            if s == "": return float(default)
+            return float(s)
+        except Exception:
+            return float(default)
 
-def _is_busy() -> bool:
-    _ensure_busy_state()
-    return bool(st.session_state._ui_busy.get("busy", False))
+    _to_float_use = _to_float_global if callable(_to_float_global) else _to_float_local
 
-def _busy_msg() -> str:
-    _ensure_busy_state()
-    return st.session_state._ui_busy.get("msg", "") or "處理中…請稍候"
+    if df is None:
+        df = pd.DataFrame(columns=cols)
 
-def _get_render_nonce() -> int:
-    """
-    每次需要避免 Plotly/Element 重複 ID 時，用這個產生唯一序號。
-    """
-    _ensure_busy_state()
-    st.session_state._render_nonce += 1
-    return int(st.session_state._render_nonce)
+    df = df.copy()
+    for c in cols:
+        if c not in df.columns:
+            df[c] = '' if c == '名稱' else 0
 
-def _render_fullpage_overlay():
-    """
-    全頁遮罩：顯示處理中並阻擋所有操作（pointer-events: none）
-    注意：Streamlit 的 render 是串流式，這個要放在頁面很前面呼叫。
-    """
-    _ensure_busy_state()
-    if not _is_busy():
-        return
+    df = df[cols].fillna('')
 
-    msg = _busy_msg()
+    # 空表就直接回空（不要硬塞預設）
+    if df.empty:
+        return pd.DataFrame(columns=cols)
 
-    st.markdown(
-        f"""
-        <style>
-        /* 讓整頁內容無法點擊 */
-        div[data-testid="stAppViewContainer"] {{
-            pointer-events: none !important;
-            user-select: none !important;
-        }}
-        /* 但遮罩本身要可以顯示 */
-        #__busy_overlay {{
-            pointer-events: all !important;
-        }}
-        </style>
+    # 選取欄位轉 bool
+    df['選取'] = df['選取'].apply(lambda v: bool(v))
 
-        <div id="__busy_overlay"
-            style="
-                position: fixed;
-                z-index: 999999;
-                top: 0; left: 0;
-                width: 100vw; height: 100vh;
-                background: rgba(255,255,255,0.85);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-direction: column;
-            ">
-            <div style="
-                padding: 14px 18px;
-                border: 1px solid rgba(0,0,0,0.12);
-                border-radius: 10px;
-                background: white;
-                box-shadow: 0 6px 20px rgba(0,0,0,0.10);
-                min-width: 260px;
-                text-align: center;
-                ">
-                <div style="font-size: 15px; font-weight: 700; margin-bottom: 6px;">⏳ {msg}</div>
-                <div style="font-size: 12px; color: rgba(0,0,0,0.55);">請等待資料處理完成後再操作</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # 數值欄位轉型
+    for c in ['長','寬','高','空箱重量']:
+        df[c] = df[c].apply(lambda x: _to_float_use(x, 0))
 
-def _trigger(action_name: str, payload: Optional[dict] = None, busy_msg: str = "處理中…"):
-    """
-    ✅ 第1段：按鈕按下當輪只做「立刻上鎖 + 記錄 action + rerun」
-    """
-    _ensure_busy_state()
-    st.session_state._action_queue = {
-        "name": action_name,
-        "payload": payload or {},
-        "token": uuid.uuid4().hex,
-        "ts": time.time(),
-    }
-    _set_busy(True, busy_msg)
-    st.rerun()
+    df['數量'] = df['數量'].apply(lambda x: int(_to_float_use(x, 0)))
 
-def _has_action() -> bool:
-    _ensure_busy_state()
-    return st.session_state._action_queue is not None
+    # 移除全空列
+    def _empty_row(r):
+        return (not str(r['名稱']).strip()) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
 
-def _handle_action(action_map: Dict[str, Callable[[dict], Any]]):
-    """
-    ✅ 第2段：下一輪真的執行耗時工作
-    - 執行期間保持 busy=True（遮罩不會解除）
-    - 完成後才解除 busy，並 rerun 讓 UI 顯示「已更新後的內容」
-    """
-    _ensure_busy_state()
-    q = st.session_state._action_queue
-    if not q:
-        return
+    df = df[~df.apply(_empty_row, axis=1)].reset_index(drop=True)
 
-    name = q.get("name")
-    payload = q.get("payload") or {}
+    # 清完若空，保持空
+    if df.empty:
+        return pd.DataFrame(columns=cols)
 
-    try:
-        # 保證執行期間是 busy（避免你遇到「畫面恢復但其實還在跑」）
-        if not _is_busy():
-            _set_busy(True, "處理中…")
-
-        fn = action_map.get(name)
-        if fn is None:
-            raise NameError(f"Action handler not found: {name}")
-
-        # 用 spinner 讓「開始」更即時（比純遮罩更快被看到）
-        with st.spinner(_busy_msg()):
-            fn(payload)
-
-    finally:
-        # 清 action + 解鎖
-        st.session_state._action_queue = None
-        _set_busy(False, "")
-
-        # ✅ 重要：再 rerun 一次，確保畫面/資料真的以「完成後狀態」呈現
-        st.rerun()
-#------A007：全域防呆遮罩 + Action 兩段式觸發器（真防呆/避免NameError）(結束)：------
+    return df
+#------A007：外箱資料清理/防呆(結束)：------
 
 
 
