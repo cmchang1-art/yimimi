@@ -965,7 +965,6 @@ def result_block():
 
     # ===== 報告摘要 =====
     st.markdown("### 🧾 訂單裝箱報告")
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
     st.markdown(
         f"""
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -998,7 +997,6 @@ def result_block():
         for k,v in counts.items():
             st.error(f"{k}：超過 {v} 個")
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # 下載（你要的 #5：與畫面一致）
     ts=_now_tw().strftime('%Y%m%d_%H%M')
