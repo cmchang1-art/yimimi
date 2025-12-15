@@ -337,36 +337,50 @@ def _sanitize_box(df:pd.DataFrame)->pd.DataFrame:
 
 
 
-#------A008：商品資料清理/防呆(開始)：------
-def _sanitize_prod(df:pd.DataFrame)->pd.DataFrame:
-    cols=['選取','商品名稱','長','寬','高','重量(kg)','數量']
-    if df is None:
-        df=pd.DataFrame(columns=cols)
-    df=df.copy()
-    for c in cols:
-        if c not in df.columns:
-            df[c]='' if c=='商品名稱' else 0
-    df=df[cols].fillna('')
+#------A008：初始化 Session State（_ensure_defaults 安全版）(開始)：------
+from datetime import datetime
 
-    if df.empty:
-        return pd.DataFrame(columns=cols)
+def _ensure_defaults():
+    # ---- 時間來源：有 _now_tw 用 _now_tw，沒有就用本機 now ----
+    try:
+        now = _now_tw()  # type: ignore
+    except Exception:
+        now = datetime.now()
 
-    df['選取']=df['選取'].astype(bool)
-    df['商品名稱']=df['商品名稱'].astype(str).str.strip()
-    for c in ['長','寬','高','重量(kg)']:
-        df[c]=df[c].apply(_to_float)
-    df['數量']=df['數量'].apply(lambda x:int(_to_float(x,0)))
+    # ---- 基本狀態 ----
+    if "order_name" not in st.session_state or not st.session_state.get("order_name"):
+        st.session_state.order_name = f"訂單_{now.strftime('%Y%m%d')}"
 
-    def empty_row(r):
-        return (not r['商品名稱']) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
+    # 版面配置
+    if "layout_mode" not in st.session_state:
+        st.session_state.layout_mode = "左右50/50"
 
-    df=df[~df.apply(empty_row,axis=1)].reset_index(drop=True)
+    # DataFrame（外箱/商品）確保存在
+    if "df_box" not in st.session_state or st.session_state.df_box is None:
+        st.session_state.df_box = pd.DataFrame(columns=["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"])
 
-    if df.empty:
-        return pd.DataFrame(columns=cols)
+    if "df_prod" not in st.session_state or st.session_state.df_prod is None:
+        st.session_state.df_prod = pd.DataFrame(columns=["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"])
 
-    return df
-#------A008：商品資料清理/防呆(結束)：------
+    # 模板狀態
+    if "active_box_tpl" not in st.session_state:
+        st.session_state.active_box_tpl = "未選擇"
+    if "active_prod_tpl" not in st.session_state:
+        st.session_state.active_prod_tpl = "未選擇"
+
+    # 計算結果暫存
+    if "pack_result" not in st.session_state:
+        st.session_state.pack_result = None
+
+    # Loading / Action（若你有用防呆遮罩）
+    if "_loading" not in st.session_state:
+        st.session_state._loading = False
+    if "_loading_msg" not in st.session_state:
+        st.session_state._loading_msg = ""
+    if "_action" not in st.session_state:
+        st.session_state._action = None
+
+#------A008：初始化 Session State（_ensure_defaults 安全版）(結束)：------
 
 
 
