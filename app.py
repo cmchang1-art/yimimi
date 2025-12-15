@@ -61,13 +61,34 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 
 #------A004：通用工具函式(含全頁防呆/待處理動作)(開始)：------
 from datetime import datetime, timedelta
+import re, html
 
 def _now_tw():
     """回傳台灣時間（UTC+8）"""
     return datetime.utcnow() + timedelta(hours=8)
 
+def _html_escape(s) -> str:
+    """給 HTML 報告用：確保文字安全不破版"""
+    return html.escape("" if s is None else str(s), quote=True)
+
+def _safe_name(s, fallback: str = "未命名") -> str:
+    """給 report title/顯示用：移除控制字元，避免空字串"""
+    if s is None:
+        return fallback
+    t = str(s).strip()
+    # 移除控制字元
+    t = re.sub(r"[\x00-\x1F\x7F]", "", t)
+    return t if t else fallback
+
+def _safe_filename(s, fallback: str = "report") -> str:
+    """給下載檔名用：去掉不合法字元（Windows/macOS/URL 都較安全）"""
+    t = _safe_name(s, fallback=fallback)
+    # 換掉檔名不適合字元
+    t = re.sub(r'[\\/:*?"<>|]+', "_", t)
+    t = re.sub(r"\s+", "_", t).strip("_")
+    return t if t else fallback
+
 def _to_float(x, default=0.0) -> float:
-    """給 _sanitize_box / _sanitize_prod 用：把各種輸入安全轉 float"""
     try:
         if x is None:
             return float(default)
@@ -119,10 +140,10 @@ def _render_fullpage_overlay(msg: str = None):
 
 def _queue_action(action: str, sheet: str, name: str, df_key: str, active_key: str):
     st.session_state['_pending_action'] = {
-        'action': action,       # 'load' | 'save' | 'delete'
+        'action': action,
         'sheet': sheet,
         'name': name,
-        'df_key': df_key,       # 'df_box' | 'df_prod'
+        'df_key': df_key,
         'active_key': active_key
     }
 
