@@ -57,7 +57,7 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 #------A003：Secrets/環境變數讀取工具(結束)：------
 
 
-#------A004：通用工具函式(整合/真防呆/避免NameError/避免重複ID)(開始)：------
+#------A004：通用工具函式(相容版/補回_has_action/真防呆/避免重複ID)(開始)：------
 from datetime import datetime, timedelta
 import re, html
 from typing import Any, Dict, Optional
@@ -133,20 +133,13 @@ def _overlay_html(msg: str) -> str:
     """
 
 def _render_fullpage_overlay():
-    """✅ main() 或任何地方都可以呼叫；只負責『畫』遮罩，不做耗時工作。"""
+    """main() 或任何地方都可以呼叫；只負責『畫』遮罩"""
     if _is_loading():
         st.markdown(_overlay_html(_loading_msg()), unsafe_allow_html=True)
 
 # ====== 兩段式觸發器：按鈕先顯示遮罩，再下一輪 rerun 才做耗時工作 ======
 def _trigger(action: str, msg: str, payload: Optional[dict] = None):
-    """
-    第1段：按鈕點下去就立刻設定 loading + action，然後 rerun
-    讓遮罩一定先出現（避免你說的『慢半拍』或根本沒出現）
-    """
-    st.session_state["_action"] = {
-        "name": action,
-        "payload": payload or {}
-    }
+    st.session_state["_action"] = {"name": action, "payload": payload or {}}
     _set_loading(True, msg)
     _force_rerun()
 
@@ -159,10 +152,6 @@ def _pop_action() -> Optional[dict]:
     return a if isinstance(a, dict) else None
 
 def _handle_action(handlers: Dict[str, callable]):
-    """
-    第2段：在『下一輪 rerun』中執行耗時工作
-    呼叫點：放在對應模組（template/result/3D）一開始
-    """
     a = _peek_action()
     if not a:
         return
@@ -170,16 +159,113 @@ def _handle_action(handlers: Dict[str, callable]):
     if name not in handlers:
         return
 
-    # ✅ overlay 已經因 loading=True 先畫出來了，這裡才真的做事
     a = _pop_action()
     try:
         handlers[name](a.get("payload") or {})
     finally:
         _set_loading(False, "")
-        _bump_render_nonce()  # ✅ 任何動作後都 bump，避免重複 element id
+        _bump_render_nonce()
         _force_rerun()
 
-# ===== GAS 清單/讀取快取（你原本 template_block 在用）=====
+# ====== ✅ 相容舊版：_has_action / pending-action ======
+def _queue_action(action: str, sheet: str, name: str, df_key: str, active_key: str):
+    st.session_state["_pending_action"] = {
+        "action": action, "sheet": sheet, "name": name,
+        "df_key": df_key, "active_key": active_key
+    }
+
+def _has_action() -> bool:
+    """✅ 讓 main() 的 if _has_action(): 不會炸；同時支援舊 pending 與新 _action"""
+    return isinstance(st.session_state.get("_pending_action"), dict) or isinstance(st.session_state.get("_action"), dict)
+
+def _handle_pending_action():
+    """
+    ✅ 若 main() 會呼叫它：這裡只處理舊 pending-action。
+    新的 _action（RUN_3D）請在 result_block 用 _handle_action(...) 處理即可。
+    """
+    p = st.session_state.get("_pending_action")
+    if not isinstance(p, dict):
+        return
+
+    action = p.get("action")
+    sheet = p.get("sheet")
+    name = p.get("name")
+    df_key = p.get("df_key")
+    active_key = p.get("active_key")
+
+    # 這裡用舊流程需要的 gas 物件（你的程式原本就有 gas / GAS_URL / GAS_TOKEN / GASClient）
+    def _do():
+        try:
+            if action == "delete":
+                ok, msg = gas.delete(sheet, name)
+                if ok:
+                    if st.session_state.get(active_key) == name:
+                        st.session_state[active_key] = ""
+                    try:
+                        st.cache_data.clear()
+                    except Exception:
+                        pass
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+            elif action == "load":
+                # 讀 payload
+                payload = None
+                try:
+                    payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, name)
+                except Exception:
+                    payload = None
+                if payload is None:
+                    payload = gas.get_payload(sheet, name)
+
+                if payload is None:
+                    st.error("載入失敗：請確認雲端連線 / 權限")
+                    return
+
+                if df_key == "df_box":
+                    st.session_state.df_box = _sanitize_box(_box_from(payload))
+                    st.session_state.pop("box_editor", None)
+                else:
+                    st.session_state.df_prod = _sanitize_prod(_prod_from(payload))
+                    st.session_state.pop("prod_editor", None)
+
+                st.session_state[active_key] = name
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+                st.success(f"已載入：{name}")
+
+            elif action == "save":
+                if df_key == "df_box":
+                    ok, msg = gas.create_only(sheet, name, _box_payload(st.session_state.df_box))
+                else:
+                    ok, msg = gas.create_only(sheet, name, _prod_payload(st.session_state.df_prod))
+                if ok:
+                    st.session_state[active_key] = name
+                    try:
+                        st.cache_data.clear()
+                    except Exception:
+                        pass
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+        except Exception as e:
+            st.error(f"動作失敗：{e}")
+
+    # 做事前先鎖頁
+    _set_loading(True, "資料處理中...")
+    try:
+        _do()
+    finally:
+        st.session_state.pop("_pending_action", None)
+        _set_loading(False, "")
+        _bump_render_nonce()
+        _force_rerun()
+
+# ===== GAS 清單/讀取快取（你 template_block 在用）=====
 @st.cache_data(ttl=20, show_spinner=False)
 def _cache_gas_list(gas_url: str, gas_token: str, sheet: str):
     c = GASClient(gas_url, gas_token)
@@ -199,13 +285,7 @@ def _cache_gas_get(gas_url: str, gas_token: str, sheet: str, name: str):
         return c.get_payload(sheet, name)
     except Exception:
         return None
-
-def _gas_cache_clear():
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-#------A004：通用工具函式(整合/真防呆/避免NameError/避免重複ID)(結束)：------
+#------A004：通用工具函式(相容版/補回_has_action/真防呆/避免重複ID)(結束)：------
 
 
 
@@ -1068,13 +1148,39 @@ def _total_items(df_prod:pd.DataFrame)->int:
 #------A017：商品總件數統計(用於檔名)(結束)：------
 
 
-#------A018：裝箱結果與3D模擬（修正重複ID/3D按鈕真防呆）(開始)：------
+#------A018：裝箱結果與3D模擬（相容版/修正重複ID/3D按鈕真防呆）(開始)：------
 def result_block():
     # ✅ 第二段：如果上一輪按了按鈕，這輪就在這裡真的執行
     def _do_run_3d(_payload: dict):
-        # 你原本的 3D 計算邏輯放這裡（不要在 button 當輪直接做）
-        # 例如：compute_packing_and_build_figs()
-        compute_3d_and_store_results()  # ← 用你現有的函式/流程名稱替換
+        st.session_state.pop("_last_3d_error", None)
+
+        # 1) 先嘗試從 session_state 指定（你若有自訂流程可用這個掛）
+        fn = st.session_state.get("_compute_3d_fn")
+
+        # 2) 若沒有，從全域找「你可能已經存在的函式名」
+        if not callable(fn):
+            candidates = [
+                "compute_3d_and_store_results",
+                "compute_and_store_results",
+                "run_3d_and_store_results",
+                "calculate_and_store_results",
+                "calculate_3d_and_store_results",
+            ]
+            for name in candidates:
+                if name in globals() and callable(globals()[name]):
+                    fn = globals()[name]
+                    break
+
+        if not callable(fn):
+            # 不要讓整頁爆炸，改成提示
+            st.session_state["_last_3d_error"] = "找不到 3D 計算函式（請確認 compute_3d_and_store_results 或指定 st.session_state['_compute_3d_fn']）"
+            return
+
+        # ✅ 真正執行（不要在這裡做任何 st.plotly_chart 渲染，渲染統一在下方）
+        try:
+            fn()
+        except Exception as e:
+            st.session_state["_last_3d_error"] = f"{type(e).__name__}: {e}"
 
     _handle_action({
         "RUN_3D": _do_run_3d,
@@ -1083,8 +1189,17 @@ def result_block():
     st.markdown("## 3. 裝箱結果與模擬")
 
     # ✅ 第一段：按下按鈕立刻出現遮罩，下一輪才做耗時工作
-    if st.button("🚀 開始計算與 3D 模擬", use_container_width=True, key=f"btn_run3d_{_get_render_nonce()}"):
+    if st.button(
+        "🚀 開始計算與 3D 模擬",
+        use_container_width=True,
+        key=f"btn_run3d_{_get_render_nonce()}",
+    ):
         _trigger("RUN_3D", "正在計算與產生 3D 模擬，請稍候...")
+
+    # 若上一輪計算有錯，先顯示（不讓整頁炸）
+    last_err = st.session_state.get("_last_3d_error")
+    if last_err:
+        st.error(f"3D 計算失敗：{last_err}")
 
     # ====== 以下渲染結果（加上唯一 key，避免 DuplicateElementId）======
     res = st.session_state.get("pack_result")  # 依你現有 session_state 名稱調整
@@ -1095,10 +1210,10 @@ def result_block():
     boxes = res.get("boxes") or []   # 每箱資訊
     nonce = _get_render_nonce()
 
-    # ✅ 不要用下拉：用 tabs（你說要頁籤）
+    # ✅ 不要用下拉：用 tabs（頁籤）
     tab_titles = []
     for i, b in enumerate(boxes):
-        title = b.get("title") or f"外箱{i+1}"
+        title = (b.get("title") or b.get("name")) or f"外箱{i+1}"
         cnt = b.get("count")
         tab_titles.append(f"{title}（{cnt}件）" if cnt is not None else title)
 
@@ -1106,20 +1221,24 @@ def result_block():
 
     for i, t in enumerate(tabs):
         with t:
-            # 你要的「每箱是否使用/裝入件數」
+            # 每箱裝入件數/箱型資訊
             if i < len(boxes):
                 bi = boxes[i]
-                st.caption(f"本箱裝入：{bi.get('count', 0)} 件｜箱型：{bi.get('name','') or bi.get('title','')}")
+                box_title = (bi.get("name") or bi.get("title") or f"外箱{i+1}")
+                st.caption(f"本箱裝入：{bi.get('count', 0)} 件｜箱型：{box_title}")
 
+            # Plotly 圖：key 必須「每次 rerun 也不會撞」
             if i < len(figs) and figs[i] is not None:
+                # fig 可能很大，hash 用 id() 就好（只求同一輪唯一）
+                fig_sig = id(figs[i])
                 st.plotly_chart(
                     figs[i],
                     use_container_width=True,
-                    key=f"plotly_box_{nonce}_{i}"  # ✅ 關鍵：避免重複 element id
+                    key=f"plotly_box_{nonce}_{i}_{fig_sig}",
                 )
             else:
                 st.info("此箱沒有 3D 圖可顯示。")
-#------A018：裝箱結果與3D模擬（修正重複ID/3D按鈕真防呆）(結束)：------
+#------A018：裝箱結果與3D模擬（相容版/修正重複ID/3D按鈕真防呆）(結束)：------
 
 
 
