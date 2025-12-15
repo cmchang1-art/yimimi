@@ -57,236 +57,94 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 #------A003：Secrets/環境變數讀取工具(結束)：------
 
 
-#------A004：通用工具函式(相容版/補回_has_action/真防呆/避免重複ID)(開始)：------
-from datetime import datetime, timedelta
-import re, html
-from typing import Any, Dict, Optional
+#------A004：全頁防呆遮罩（loading overlay + watchdog 防白屏）(開始)：------
+import time
 
-def _now_tw():
-    return datetime.utcnow() + timedelta(hours=8)
-
-def _html_escape(s) -> str:
-    return html.escape("" if s is None else str(s), quote=True)
-
-def _safe_name(s: Any, fallback: str = "未命名") -> str:
-    if s is None:
-        return fallback
-    t = str(s).strip()
-    t = re.sub(r"[\x00-\x1F\x7F]", "", t)
-    return t if t else fallback
-
-def _safe_filename(s: Any, fallback: str = "report") -> str:
-    t = _safe_name(s, fallback=fallback)
-    t = re.sub(r'[\\/:*?"<>|]+', "_", t)
-    t = re.sub(r"\s+", "_", t).strip("_")
-    return t if t else fallback
-
-def _to_float(x, default=0.0) -> float:
-    try:
-        if x is None:
-            return float(default)
-        if isinstance(x, (int, float)):
-            return float(x)
-        s = str(x).strip()
-        if s == "":
-            return float(default)
-        return float(s)
-    except Exception:
-        return float(default)
-
-def _force_rerun():
-    try:
-        st.rerun()
-    except Exception:
-        try:
-            st.experimental_rerun()
-        except Exception:
-            pass
-
-# ====== Render Nonce：避免 StreamlitDuplicateElementId（Plotly/Tab 多次渲染）======
-def _bump_render_nonce():
-    st.session_state["_render_nonce"] = int(st.session_state.get("_render_nonce", 0)) + 1
-
-def _get_render_nonce() -> int:
-    return int(st.session_state.get("_render_nonce", 0))
-
-# ====== 真防呆：全頁遮罩（可被 main() 呼叫渲染）======
 def _is_loading() -> bool:
-    return bool(st.session_state.get("_loading", False))
+    # ✅ 嚴格只接受 True，避免 "True"/1/None 亂入造成誤判
+    return st.session_state.get("_loading", False) is True
 
 def _set_loading(flag: bool, msg: str = "資料處理中..."):
-    st.session_state["_loading"] = bool(flag)
+    st.session_state["_loading"] = (flag is True)
     st.session_state["_loading_msg"] = msg or "資料處理中..."
+    if flag is True:
+        st.session_state["_loading_since"] = time.time()
+    else:
+        st.session_state.pop("_loading_since", None)
 
 def _loading_msg() -> str:
     return str(st.session_state.get("_loading_msg") or "資料處理中...")
 
+def _loading_watchdog(timeout_sec: int = 60):
+    """
+    ✅ 防止卡死白屏：如果 loading 超過 timeout_sec，強制解除
+    """
+    if not _is_loading():
+        return
+    since = st.session_state.get("_loading_since", None)
+    if since is None:
+        # 沒有時間戳也別卡住
+        _set_loading(False, "")
+        return
+    if time.time() - float(since) > float(timeout_sec):
+        st.session_state["_last_3d_error"] = "系統偵測到操作逾時，已自動解除讀取鎖定（請再試一次）。"
+        _set_loading(False, "")
+
 def _overlay_html(msg: str) -> str:
     m = msg or "資料處理中..."
+    # ✅ 遮罩一定看得到，不會「白白一片」
     return f"""
+    <style>
+      .fullpage-overlay {{
+        position: fixed; inset: 0;
+        background: rgba(255,255,255,.72);
+        z-index: 999999;
+        display: flex; align-items: center; justify-content: center;
+        pointer-events: all;
+      }}
+      .fullpage-box {{
+        min-width: 260px;
+        padding: 16px 20px;
+        border-radius: 14px;
+        border: 1px solid rgba(0,0,0,.10);
+        background: rgba(255,255,255,.95);
+        box-shadow: 0 8px 28px rgba(0,0,0,.12);
+        color: rgba(0,0,0,.85);
+        font-size: 16px;
+        line-height: 1.4;
+        text-align: center;
+      }}
+      .fullpage-sub {{
+        margin-top: 8px;
+        font-size: 12px;
+        color: rgba(0,0,0,.55);
+      }}
+      .fullpage-spin {{
+        display:inline-block;
+        width:18px;height:18px;
+        border:2px solid rgba(0,0,0,.18);
+        border-top-color: rgba(0,0,0,.55);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+        vertical-align: -3px;
+        margin-right: 8px;
+      }}
+      @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    </style>
     <div class="fullpage-overlay">
       <div class="fullpage-box">
-        ⏳ {m}
+        <span class="fullpage-spin"></span>{html.escape(m)}
         <div class="fullpage-sub">請稍候，完成後才能繼續操作</div>
       </div>
     </div>
     """
 
 def _render_fullpage_overlay():
-    """main() 或任何地方都可以呼叫；只負責『畫』遮罩"""
+    # ✅ 每次 render 前先跑 watchdog，避免卡住白屏
+    _loading_watchdog(timeout_sec=60)
     if _is_loading():
         st.markdown(_overlay_html(_loading_msg()), unsafe_allow_html=True)
-
-# ====== 兩段式觸發器：按鈕先顯示遮罩，再下一輪 rerun 才做耗時工作 ======
-def _trigger(action: str, msg: str, payload: Optional[dict] = None):
-    st.session_state["_action"] = {"name": action, "payload": payload or {}}
-    _set_loading(True, msg)
-    _force_rerun()
-
-def _peek_action() -> Optional[dict]:
-    a = st.session_state.get("_action")
-    return a if isinstance(a, dict) else None
-
-def _pop_action() -> Optional[dict]:
-    a = st.session_state.pop("_action", None)
-    return a if isinstance(a, dict) else None
-
-def _handle_action(handlers: Dict[str, callable]):
-    a = _peek_action()
-    if not a:
-        return
-    name = a.get("name")
-    if name not in handlers:
-        return
-
-    a = _pop_action()
-    try:
-        handlers[name](a.get("payload") or {})
-    finally:
-        _set_loading(False, "")
-        _bump_render_nonce()
-        _force_rerun()
-
-# ====== ✅ 相容舊版：_has_action / pending-action ======
-def _queue_action(action: str, sheet: str, name: str, df_key: str, active_key: str):
-    st.session_state["_pending_action"] = {
-        "action": action, "sheet": sheet, "name": name,
-        "df_key": df_key, "active_key": active_key
-    }
-
-def _has_action() -> bool:
-    """✅ 讓 main() 的 if _has_action(): 不會炸；同時支援舊 pending 與新 _action"""
-    return isinstance(st.session_state.get("_pending_action"), dict) or isinstance(st.session_state.get("_action"), dict)
-
-def _handle_pending_action():
-    """
-    ✅ 若 main() 會呼叫它：這裡只處理舊 pending-action。
-    新的 _action（RUN_3D）請在 result_block 用 _handle_action(...) 處理即可。
-    """
-    p = st.session_state.get("_pending_action")
-    if not isinstance(p, dict):
-        return
-
-    action = p.get("action")
-    sheet = p.get("sheet")
-    name = p.get("name")
-    df_key = p.get("df_key")
-    active_key = p.get("active_key")
-
-    # 這裡用舊流程需要的 gas 物件（你的程式原本就有 gas / GAS_URL / GAS_TOKEN / GASClient）
-    def _do():
-        try:
-            if action == "delete":
-                ok, msg = gas.delete(sheet, name)
-                if ok:
-                    if st.session_state.get(active_key) == name:
-                        st.session_state[active_key] = ""
-                    try:
-                        st.cache_data.clear()
-                    except Exception:
-                        pass
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
-            elif action == "load":
-                # 讀 payload
-                payload = None
-                try:
-                    payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, name)
-                except Exception:
-                    payload = None
-                if payload is None:
-                    payload = gas.get_payload(sheet, name)
-
-                if payload is None:
-                    st.error("載入失敗：請確認雲端連線 / 權限")
-                    return
-
-                if df_key == "df_box":
-                    st.session_state.df_box = _sanitize_box(_box_from(payload))
-                    st.session_state.pop("box_editor", None)
-                else:
-                    st.session_state.df_prod = _sanitize_prod(_prod_from(payload))
-                    st.session_state.pop("prod_editor", None)
-
-                st.session_state[active_key] = name
-                try:
-                    st.cache_data.clear()
-                except Exception:
-                    pass
-                st.success(f"已載入：{name}")
-
-            elif action == "save":
-                if df_key == "df_box":
-                    ok, msg = gas.create_only(sheet, name, _box_payload(st.session_state.df_box))
-                else:
-                    ok, msg = gas.create_only(sheet, name, _prod_payload(st.session_state.df_prod))
-                if ok:
-                    st.session_state[active_key] = name
-                    try:
-                        st.cache_data.clear()
-                    except Exception:
-                        pass
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
-        except Exception as e:
-            st.error(f"動作失敗：{e}")
-
-    # 做事前先鎖頁
-    _set_loading(True, "資料處理中...")
-    try:
-        _do()
-    finally:
-        st.session_state.pop("_pending_action", None)
-        _set_loading(False, "")
-        _bump_render_nonce()
-        _force_rerun()
-
-# ===== GAS 清單/讀取快取（你 template_block 在用）=====
-@st.cache_data(ttl=20, show_spinner=False)
-def _cache_gas_list(gas_url: str, gas_token: str, sheet: str):
-    c = GASClient(gas_url, gas_token)
-    if not getattr(c, "ready", False):
-        return []
-    try:
-        return c.list_names(sheet) or []
-    except Exception:
-        return []
-
-@st.cache_data(ttl=20, show_spinner=False)
-def _cache_gas_get(gas_url: str, gas_token: str, sheet: str, name: str):
-    c = GASClient(gas_url, gas_token)
-    if not getattr(c, "ready", False):
-        return None
-    try:
-        return c.get_payload(sheet, name)
-    except Exception:
-        return None
-#------A004：通用工具函式(相容版/補回_has_action/真防呆/避免重複ID)(結束)：------
-
+#------A004：全頁防呆遮罩（loading overlay + watchdog 防白屏）(結束)：------
 
 
 #------A005：Google Apps Script(GAS) API Client(開始)：------
@@ -1306,7 +1164,9 @@ def main():
 #------A019：主程式 UI（版面配置：左右 / 上下）(結束)：------
 
 
-#------A020：程式進入點(開始)：------
-if __name__ == '__main__':
-    main()
-#------A020：程式進入點(結束)：------
+#------A020：main() 開頭加入 overlay/watchdog (開始)：------
+def main():
+    _render_fullpage_overlay()  # ✅ 一進來就先顯示/解除遮罩（避免白屏）
+
+    # 你原本的 main() 內容照舊...
+#------A020：main() 開頭加入 overlay/watchdog (結束)：------
