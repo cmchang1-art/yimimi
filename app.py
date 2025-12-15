@@ -57,7 +57,6 @@ def _safe_name(s:str)->str:
     return s[:60]
 
 def _force_rerun():
-    # Streamlit 新版：st.rerun；舊版：st.experimental_rerun
     try:
         st.rerun()
     except Exception:
@@ -69,7 +68,7 @@ def _force_rerun():
 def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
     """
     將 st.data_editor 的 widget state（dict: edited_rows/added_rows/deleted_rows）
-    套用回 DataFrame，讓「不按套用」也能用最新勾選/修改結果進行計算。
+    套用回 DataFrame。這樣「不按套用變更」也能用畫面上最新勾選/修改來計算。
     """
     if df is None:
         df = pd.DataFrame()
@@ -82,7 +81,7 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
     deleted_rows = state.get("deleted_rows") or []
     added_rows = state.get("added_rows") or []
 
-    # 1) 套用 edited_rows（row index -> {col: value}）
+    # 1) edited_rows: {row_index: {col: value}}
     if isinstance(edited_rows, dict) and not out.empty:
         for ridx, changes in edited_rows.items():
             try:
@@ -96,24 +95,21 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
                     if col in out.columns:
                         out.at[out.index[i], col] = val
 
-    # 2) 套用 deleted_rows（row index list）
+    # 2) deleted_rows: [row_index...]
     if isinstance(deleted_rows, list) and not out.empty:
-        # 反向刪除避免 index 位移
-        for ridx in sorted([r for r in deleted_rows if isinstance(r, (int, float, str))], reverse=True):
+        for ridx in sorted(deleted_rows, reverse=True):
             try:
                 i = int(ridx)
             except Exception:
                 continue
             if 0 <= i < len(out):
                 out = out.drop(out.index[i])
-
         out = out.reset_index(drop=True)
 
-    # 3) 套用 added_rows（list of dict）
+    # 3) added_rows: [{col: val}...]
     if isinstance(added_rows, list):
         for row in added_rows:
             if isinstance(row, dict):
-                # 只保留已存在欄位；若 df 原本是空，先用 row 建欄位
                 if out.empty and len(out.columns) == 0:
                     out = pd.DataFrame(columns=list(row.keys()))
                 safe_row = {c: row.get(c, "") for c in out.columns}
@@ -121,6 +117,7 @@ def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
 
     return out
 #------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
+
 
 
 #------A005：Google Apps Script(GAS) API Client(開始)：------
@@ -747,18 +744,23 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack'):
-
-        # ✅ 關鍵：只在 editor 值真的是 DataFrame 才使用它；否則用 df_box/df_prod（模板/套用後的正確值）
+        # ✅ 這裡是關鍵：把「畫面上勾選/修改」從 editor state 套回 df，再進行計算
         df_box_src = st.session_state.df_box
         df_prod_src = st.session_state.df_prod
 
         be = st.session_state.get('box_editor', None)
         pe = st.session_state.get('prod_editor', None)
 
+        # data_editor 可能是 DataFrame（少見）或 dict（常見）
         if isinstance(be, pd.DataFrame):
             df_box_src = be
+        elif isinstance(be, dict):
+            df_box_src = _apply_editor_state(df_box_src, be)
+
         if isinstance(pe, pd.DataFrame):
             df_prod_src = pe
+        elif isinstance(pe, dict):
+            df_prod_src = _apply_editor_state(df_prod_src, pe)
 
         st.session_state.df_box = _sanitize_box(df_box_src)
         st.session_state.df_prod = _sanitize_prod(df_prod_src)
@@ -796,20 +798,8 @@ def result_block():
         for k,v in counts.items():
             st.error(f"{k}：超過 {v} 個")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.plotly_chart(res['fig'], use_container_width=True)
+    st.plotly_chart(res['fig'], use_container_wi_
 
-    ts=_now_tw().strftime('%Y%m%d_%H%M')
-    fname=f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
-    st.download_button(
-        '⬇️ 下載完整裝箱報告（.html）',
-        data=res['report_html'].encode('utf-8'),
-        file_name=fname,
-        mime='text/html',
-        use_container_width=True,
-        key='dl_report'
-    )
-#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
 
