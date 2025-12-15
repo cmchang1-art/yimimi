@@ -57,137 +57,91 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 #------A003：Secrets/環境變數讀取工具(結束)：------
 
 
-#------A004：通用工具函式(型別/時間/檔名安全)(開始)：------
-def _to_float(x, default=0.0)->float:
-    try:
-        return float(x)
-    except Exception:
-        try:
-            return float(str(x).strip())
-        except Exception:
-            return float(default)
+#------A004：相容舊版 pending-action（避免 _has_action NameError）(開始)：------
+def _queue_action(action: str, sheet: str, name: str, df_key: str, active_key: str):
+    """相容舊版：若你未來想恢復 pending 模式可用；目前可不使用。"""
+    st.session_state['_pending_action'] = {
+        'action': action,
+        'sheet': sheet,
+        'name': name,
+        'df_key': df_key,
+        'active_key': active_key
+    }
 
-def _now_tw()->datetime:
-    return datetime.utcnow()+timedelta(hours=8)
+def _has_action() -> bool:
+    """main() 仍會呼叫，確保不再 NameError。"""
+    return isinstance(st.session_state.get('_pending_action'), dict)
 
-def _safe_name(s:str)->str:
-    s=(s or '').strip() or '訂單'
-    s=re.sub(r'[\\/:*?"<>| ]+','_',s)
-    return s[:60]
+def _pop_action():
+    return st.session_state.pop('_pending_action', None)
 
-def _force_rerun():
-    try:
-        st.rerun()
-    except Exception:
-        try:
-            st.experimental_rerun()
-        except Exception:
-            pass
-
-def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
-    if df is None:
-        df = pd.DataFrame()
-    out = df.copy()
-
-    if not isinstance(state, dict):
-        return out
-
-    edited_rows = state.get("edited_rows") or {}
-    deleted_rows = state.get("deleted_rows") or []
-    added_rows = state.get("added_rows") or []
-
-    if isinstance(edited_rows, dict) and not out.empty:
-        for ridx, changes in edited_rows.items():
-            try:
-                i = int(ridx)
-            except Exception:
-                continue
-            if i < 0 or i >= len(out):
-                continue
-            if isinstance(changes, dict):
-                for col, val in changes.items():
-                    if col in out.columns:
-                        out.at[out.index[i], col] = val
-
-    if isinstance(deleted_rows, list) and not out.empty:
-        for ridx in sorted(deleted_rows, reverse=True):
-            try:
-                i = int(ridx)
-            except Exception:
-                continue
-            if 0 <= i < len(out):
-                out = out.drop(out.index[i])
-        out = out.reset_index(drop=True)
-
-    if isinstance(added_rows, list):
-        for row in added_rows:
-            if isinstance(row, dict):
-                if out.empty and len(out.columns) == 0:
-                    out = pd.DataFrame(columns=list(row.keys()))
-                safe_row = {c: row.get(c, "") for c in out.columns}
-                out = pd.concat([out, pd.DataFrame([safe_row])], ignore_index=True)
-
-    return out
-
-# ===== Loading 控制（真防呆：全頁鎖定）=====
-def _is_loading()->bool:
-    return bool(st.session_state.get('_loading', False))
-
-def _set_loading(flag: bool, msg: str = '資料處理中...'):
-    st.session_state['_loading'] = bool(flag)
-    st.session_state['_loading_msg'] = msg or '資料處理中...'
-
-def _loading_msg()->str:
-    return str(st.session_state.get('_loading_msg', '資料處理中...') or '資料處理中...')
-
-def _fullpage_overlay_html(msg: str = None) -> str:
-    m = msg or _loading_msg()
-    return f"""
-    <div class="fullpage-overlay">
-      <div class="fullpage-box">
-        ⏳ {m}
-        <div class="fullpage-sub">請稍候，完成後才能繼續操作</div>
-      </div>
-    </div>
+def _handle_pending_action():
     """
+    相容舊版：如果真的存在 pending_action，就用真防呆方式處理。
+    若你現在沒有使用 _queue_action，這段不會被執行。
+    """
+    p = st.session_state.get('_pending_action')
+    if not isinstance(p, dict):
+        return
 
-def _with_fullpage_lock(msg: str, fn):
-    """
-    ✅ 真防呆核心：
-    - 立刻把 fullpage overlay 寫到前端（delta 立即送出）
-    - overlay 期間全頁不可操作
-    - fn 真正做完後才移除 overlay / rerun 更新
-    """
-    _set_loading(True, msg)
-    ph = st.empty()
-    ph.markdown(_fullpage_overlay_html(msg), unsafe_allow_html=True)
+    action = p.get('action')
+    sheet  = p.get('sheet')
+    name   = p.get('name')
+    df_key = p.get('df_key')
+    active_key = p.get('active_key')
+
+    def _do():
+        if action == 'load':
+            payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, name) if 'GAS_URL' in globals() else gas.get_payload(sheet, name)
+            if payload is None:
+                st.error('載入失敗：請確認雲端連線 / 權限')
+                return
+            if df_key == 'df_box':
+                df_loaded = _sanitize_box(_box_from(payload))
+                st.session_state.df_box = df_loaded
+                st.session_state['_box_live_df'] = df_loaded.copy()
+                st.session_state.pop('box_editor', None)
+            else:
+                df_loaded = _sanitize_prod(_prod_from(payload))
+                st.session_state.df_prod = df_loaded
+                st.session_state['_prod_live_df'] = df_loaded.copy()
+                st.session_state.pop('prod_editor', None)
+            st.session_state[active_key] = name
+            try: _gas_cache_clear()
+            except Exception: pass
+            st.success(f'已載入：{name}')
+
+        elif action == 'save':
+            if df_key == 'df_box':
+                ok, msg = gas.create_only(sheet, name, _box_payload(st.session_state.df_box))
+            else:
+                ok, msg = gas.create_only(sheet, name, _prod_payload(st.session_state.df_prod))
+            if ok:
+                st.session_state[active_key] = name
+                try: _gas_cache_clear()
+                except Exception: pass
+                st.success(msg)
+            else:
+                st.error(msg)
+
+        elif action == 'delete':
+            ok, msg = gas.delete(sheet, name)
+            if ok:
+                if st.session_state.get(active_key) == name:
+                    st.session_state[active_key] = ''
+                try: _gas_cache_clear()
+                except Exception: pass
+                st.success(msg)
+            else:
+                st.error(msg)
+
+    # ✅ 用你現在的「真防呆」去跑
     try:
-        return fn()
+        _with_fullpage_lock('資料處理中...', _do)
     finally:
-        # 先移除 overlay，再解除 loading
-        try:
-            ph.empty()
-        except Exception:
-            pass
-        _set_loading(False, '')
-
-# ===== GAS cache（減少 list/get 的延遲）=====
-@st.cache_data(ttl=20, show_spinner=False)
-def _cache_gas_list(url: str, token: str, sheet: str) -> List[str]:
-    c = GASClient(url, token)
-    return c.list_names(sheet) if c.ready else []
-
-@st.cache_data(ttl=20, show_spinner=False)
-def _cache_gas_get(url: str, token: str, sheet: str, name: str) -> Optional[Dict[str, Any]]:
-    c = GASClient(url, token)
-    return c.get_payload(sheet, name) if c.ready else None
-
-def _gas_cache_clear():
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-#------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
+        _pop_action()
+        _force_rerun()
+#------A004：相容舊版 pending-action（避免 _has_action NameError）(結束)：------
 
 
 
