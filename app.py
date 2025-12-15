@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 #------A001：匯入套件(開始)：------
 import os, json, re
+import time
+import html
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional, Tuple
 
 import requests
@@ -11,6 +14,7 @@ from py3dbp import Packer, Bin, Item
 import plotly.graph_objects as go
 from plotly.offline import plot as plotly_offline_plot
 #------A001：匯入套件(結束)：------
+
 
 
 #------A002：Streamlit頁面設定與全域CSS(開始)：------
@@ -43,18 +47,36 @@ st.markdown('''<style>
 
 
 
-#------A003：Secrets/環境變數讀取工具(開始)：------
-def _secret(k:str, d:str='')->str:
-    try:
-        return str(st.secrets.get(k, d))
-    except Exception:
-        return os.getenv(k, d) or d
+#------A003：通用工具（時間/轉型/安全字串）(開始)：------
+def _now_tw() -> datetime:
+    """台灣時間 now()（避免 NameError）"""
+    return datetime.now(ZoneInfo("Asia/Taipei"))
 
-GAS_URL=_secret('GAS_URL','').strip()
-GAS_TOKEN=_secret('GAS_TOKEN','').strip()
-SHEET_BOX=_secret('SHEET_BOX','box_templates').strip()
-SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
-#------A003：Secrets/環境變數讀取工具(結束)：------
+def _to_float(x, default: float = 0.0) -> float:
+    """把各種輸入安全轉 float（支援 '', None, '1,234', ' 12 '）"""
+    try:
+        if x is None:
+            return default
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip()
+        if s == "":
+            return default
+        s = s.replace(",", "")
+        return float(s)
+    except Exception:
+        return default
+
+def _safe_name(s: str, fallback: str = "report") -> str:
+    """給檔名/模板名用：移除不合法字元"""
+    s = (s or "").strip()
+    if not s:
+        return fallback
+    s = re.sub(r"[\\/:*?\"<>|]+", "_", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or fallback
+#------A003：通用工具（時間/轉型/安全字串）(結束)：------
+
 
 
 #------A004：全頁防呆遮罩（loading overlay + watchdog 防白屏）(開始)：------
@@ -1102,6 +1124,8 @@ def result_block():
 
 #------A019：主程式 UI（版面配置：左右 / 上下）(開始)：------
 def main():
+    _loading_watchdog(timeout_sec=60)  # ✅ 避免 loading 卡死造成一直遮罩
+
     _ensure_defaults()
 
     # ✅ 先處理 pending action（會顯示全頁遮罩並執行 IO）
@@ -1164,9 +1188,9 @@ def main():
 #------A019：主程式 UI（版面配置：左右 / 上下）(結束)：------
 
 
-#------A020：main() 開頭加入 overlay/watchdog (開始)：------
-def main():
-    _render_fullpage_overlay()  # ✅ 一進來就先顯示/解除遮罩（避免白屏）
+#------A020：程式入口（避免覆蓋 main / 防止白屏）(開始)：------
+# ⚠️ 不要再定義第二個 main()，會覆蓋 A019 的主程式 main()
+# Streamlit 需要在檔案最後呼叫一次 main() 才會渲染 UI
 
-    # 你原本的 main() 內容照舊...
-#------A020：main() 開頭加入 overlay/watchdog (結束)：------
+main()
+#------A020：程式入口（避免覆蓋 main / 防止白屏）(結束)：------
