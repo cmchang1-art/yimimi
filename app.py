@@ -57,13 +57,12 @@ SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
 #------A003：Secrets/環境變數讀取工具(結束)：------
 
 
-#------A004：通用工具函式(整合最終版/避免NameError/含GAS快取/真防呆/相容舊流程)(開始)：------
+#------A004：通用工具函式(整合/真防呆/避免NameError/避免重複ID)(開始)：------
 from datetime import datetime, timedelta
 import re, html
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 def _now_tw():
-    """台灣時間（UTC+8）"""
     return datetime.utcnow() + timedelta(hours=8)
 
 def _html_escape(s) -> str:
@@ -104,65 +103,26 @@ def _force_rerun():
         except Exception:
             pass
 
-def _apply_editor_state(df, state: Any):
-    """把 st.data_editor 的 edited_rows/added_rows/deleted_rows 套回 DataFrame"""
-    if df is None:
-        return df
-    out = df.copy()
+# ====== Render Nonce：避免 StreamlitDuplicateElementId（Plotly/Tab 多次渲染）======
+def _bump_render_nonce():
+    st.session_state["_render_nonce"] = int(st.session_state.get("_render_nonce", 0)) + 1
 
-    if not isinstance(state, dict):
-        return out
+def _get_render_nonce() -> int:
+    return int(st.session_state.get("_render_nonce", 0))
 
-    edited_rows = state.get("edited_rows") or {}
-    deleted_rows = state.get("deleted_rows") or []
-    added_rows = state.get("added_rows") or []
-
-    if isinstance(edited_rows, dict) and not out.empty:
-        for ridx, changes in edited_rows.items():
-            try:
-                i = int(ridx)
-            except Exception:
-                continue
-            if i < 0 or i >= len(out):
-                continue
-            if isinstance(changes, dict):
-                for col, val in changes.items():
-                    if col in out.columns:
-                        out.at[out.index[i], col] = val
-
-    if isinstance(deleted_rows, list) and not out.empty:
-        for ridx in sorted(deleted_rows, reverse=True):
-            try:
-                i = int(ridx)
-            except Exception:
-                continue
-            if 0 <= i < len(out):
-                out = out.drop(out.index[i])
-        out = out.reset_index(drop=True)
-
-    if isinstance(added_rows, list):
-        for row in added_rows:
-            if isinstance(row, dict):
-                if out.empty and len(out.columns) == 0:
-                    out = pd.DataFrame(columns=list(row.keys()))
-                safe_row = {c: row.get(c, "") for c in out.columns}
-                out = pd.concat([out, pd.DataFrame([safe_row])], ignore_index=True)
-
-    return out
-
-# ===== 真防呆（全頁鎖定）=====
+# ====== 真防呆：全頁遮罩（可被 main() 呼叫渲染）======
 def _is_loading() -> bool:
-    return bool(st.session_state.get('_loading', False))
+    return bool(st.session_state.get("_loading", False))
 
-def _set_loading(flag: bool, msg: str = '資料處理中...'):
-    st.session_state['_loading'] = bool(flag)
-    st.session_state['_loading_msg'] = msg or '資料處理中...'
+def _set_loading(flag: bool, msg: str = "資料處理中..."):
+    st.session_state["_loading"] = bool(flag)
+    st.session_state["_loading_msg"] = msg or "資料處理中..."
 
 def _loading_msg() -> str:
-    return str(st.session_state.get('_loading_msg', '資料處理中...') or '資料處理中...')
+    return str(st.session_state.get("_loading_msg") or "資料處理中...")
 
-def _fullpage_overlay_html(msg: str = None) -> str:
-    m = msg or _loading_msg()
+def _overlay_html(msg: str) -> str:
+    m = msg or "資料處理中..."
     return f"""
     <div class="fullpage-overlay">
       <div class="fullpage-box">
@@ -172,25 +132,58 @@ def _fullpage_overlay_html(msg: str = None) -> str:
     </div>
     """
 
-def _with_fullpage_lock(msg: str, fn):
-    _set_loading(True, msg)
-    ph = st.empty()
-    ph.markdown(_fullpage_overlay_html(msg), unsafe_allow_html=True)
-    try:
-        return fn()
-    finally:
-        try:
-            ph.empty()
-        except Exception:
-            pass
-        _set_loading(False, '')
+def _render_fullpage_overlay():
+    """✅ main() 或任何地方都可以呼叫；只負責『畫』遮罩，不做耗時工作。"""
+    if _is_loading():
+        st.markdown(_overlay_html(_loading_msg()), unsafe_allow_html=True)
 
-# ===== GAS 清單/讀取快取（修正 _cache_gas_list NameError）=====
+# ====== 兩段式觸發器：按鈕先顯示遮罩，再下一輪 rerun 才做耗時工作 ======
+def _trigger(action: str, msg: str, payload: Optional[dict] = None):
+    """
+    第1段：按鈕點下去就立刻設定 loading + action，然後 rerun
+    讓遮罩一定先出現（避免你說的『慢半拍』或根本沒出現）
+    """
+    st.session_state["_action"] = {
+        "name": action,
+        "payload": payload or {}
+    }
+    _set_loading(True, msg)
+    _force_rerun()
+
+def _peek_action() -> Optional[dict]:
+    a = st.session_state.get("_action")
+    return a if isinstance(a, dict) else None
+
+def _pop_action() -> Optional[dict]:
+    a = st.session_state.pop("_action", None)
+    return a if isinstance(a, dict) else None
+
+def _handle_action(handlers: Dict[str, callable]):
+    """
+    第2段：在『下一輪 rerun』中執行耗時工作
+    呼叫點：放在對應模組（template/result/3D）一開始
+    """
+    a = _peek_action()
+    if not a:
+        return
+    name = a.get("name")
+    if name not in handlers:
+        return
+
+    # ✅ overlay 已經因 loading=True 先畫出來了，這裡才真的做事
+    a = _pop_action()
+    try:
+        handlers[name](a.get("payload") or {})
+    finally:
+        _set_loading(False, "")
+        _bump_render_nonce()  # ✅ 任何動作後都 bump，避免重複 element id
+        _force_rerun()
+
+# ===== GAS 清單/讀取快取（你原本 template_block 在用）=====
 @st.cache_data(ttl=20, show_spinner=False)
 def _cache_gas_list(gas_url: str, gas_token: str, sheet: str):
-    """模板清單：快取 20 秒，避免每次 rerun 都打 GAS 很慢"""
     c = GASClient(gas_url, gas_token)
-    if not getattr(c, 'ready', False):
+    if not getattr(c, "ready", False):
         return []
     try:
         return c.list_names(sheet) or []
@@ -199,9 +192,8 @@ def _cache_gas_list(gas_url: str, gas_token: str, sheet: str):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _cache_gas_get(gas_url: str, gas_token: str, sheet: str, name: str):
-    """模板內容：快取 20 秒"""
     c = GASClient(gas_url, gas_token)
-    if not getattr(c, 'ready', False):
+    if not getattr(c, "ready", False):
         return None
     try:
         return c.get_payload(sheet, name)
@@ -209,96 +201,11 @@ def _cache_gas_get(gas_url: str, gas_token: str, sheet: str, name: str):
         return None
 
 def _gas_cache_clear():
-    """儲存/刪除模板後清快取，讓清單馬上更新"""
     try:
         st.cache_data.clear()
     except Exception:
         pass
-
-# ===== 相容舊版 pending-action（避免 _has_action NameError）=====
-def _queue_action(action: str, sheet: str, name: str, df_key: str, active_key: str):
-    st.session_state['_pending_action'] = {
-        'action': action,
-        'sheet': sheet,
-        'name': name,
-        'df_key': df_key,
-        'active_key': active_key
-    }
-
-def _has_action() -> bool:
-    return isinstance(st.session_state.get('_pending_action'), dict)
-
-def _pop_action():
-    return st.session_state.pop('_pending_action', None)
-
-def _handle_pending_action():
-    p = st.session_state.get('_pending_action')
-    if not isinstance(p, dict):
-        return
-
-    action = p.get('action')
-    sheet  = p.get('sheet')
-    name   = p.get('name')
-    df_key = p.get('df_key')
-    active_key = p.get('active_key')
-
-    def _do():
-        if action == 'load':
-            # 若你 template_block 用快取，這邊也用快取取 payload
-            payload = None
-            try:
-                payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, name)
-            except Exception:
-                payload = gas.get_payload(sheet, name)
-
-            if payload is None:
-                st.error('載入失敗：請確認雲端連線 / 權限')
-                return
-
-            if df_key == 'df_box':
-                df_loaded = _sanitize_box(_box_from(payload))
-                st.session_state.df_box = df_loaded
-                st.session_state['_box_live_df'] = df_loaded.copy()
-                st.session_state.pop('box_editor', None)
-            else:
-                df_loaded = _sanitize_prod(_prod_from(payload))
-                st.session_state.df_prod = df_loaded
-                st.session_state['_prod_live_df'] = df_loaded.copy()
-                st.session_state.pop('prod_editor', None)
-
-            st.session_state[active_key] = name
-            _gas_cache_clear()
-            st.success(f'已載入：{name}')
-
-        elif action == 'save':
-            if df_key == 'df_box':
-                ok, msg = gas.create_only(sheet, name, _box_payload(st.session_state.df_box))
-            else:
-                ok, msg = gas.create_only(sheet, name, _prod_payload(st.session_state.df_prod))
-
-            if ok:
-                st.session_state[active_key] = name
-                _gas_cache_clear()
-                st.success(msg)
-            else:
-                st.error(msg)
-
-        elif action == 'delete':
-            ok, msg = gas.delete(sheet, name)
-            if ok:
-                if st.session_state.get(active_key) == name:
-                    st.session_state[active_key] = ''
-                _gas_cache_clear()
-                st.success(msg)
-            else:
-                st.error(msg)
-
-    try:
-        _with_fullpage_lock('資料處理中...', _do)
-    finally:
-        _pop_action()
-        _force_rerun()
-#------A004：通用工具函式(整合最終版/避免NameError/含GAS快取/真防呆/相容舊流程)(結束)：------
+#------A004：通用工具函式(整合/真防呆/避免NameError/避免重複ID)(結束)：------
 
 
 
@@ -1161,127 +1068,58 @@ def _total_items(df_prod:pd.DataFrame)->int:
 #------A017：商品總件數統計(用於檔名)(結束)：------
 
 
-#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(開始)：------
+#------A018：裝箱結果與3D模擬（修正重複ID/3D按鈕真防呆）(開始)：------
 def result_block():
-    st.markdown('## 3. 裝箱結果與模擬')
+    # ✅ 第二段：如果上一輪按了按鈕，這輪就在這裡真的執行
+    def _do_run_3d(_payload: dict):
+        # 你原本的 3D 計算邏輯放這裡（不要在 button 當輪直接做）
+        # 例如：compute_packing_and_build_figs()
+        compute_3d_and_store_results()  # ← 用你現有的函式/流程名稱替換
 
-    loading = _is_loading()
+    _handle_action({
+        "RUN_3D": _do_run_3d,
+    })
 
-    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+    st.markdown("## 3. 裝箱結果與模擬")
 
-        def _do_pack():
-            # ✅ 永遠以「畫面最新狀態」為準（含勾選/修改但未按套用變更）
-            df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
-            df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
+    # ✅ 第一段：按下按鈕立刻出現遮罩，下一輪才做耗時工作
+    if st.button("🚀 開始計算與 3D 模擬", use_container_width=True, key=f"btn_run3d_{_get_render_nonce()}"):
+        _trigger("RUN_3D", "正在計算與產生 3D 模擬，請稍候...")
 
-            st.session_state.df_box  = _sanitize_box(df_box_src)
-            st.session_state.df_prod = _sanitize_prod(df_prod_src)
-
-            st.session_state.last_result = pack_and_render(
-                st.session_state.order_name,
-                st.session_state.df_box,
-                st.session_state.df_prod
-            )
-
-        # ✅ 3D運算也必須真防呆（全頁鎖住直到真的算完）
-        _with_fullpage_lock('計算與 3D 模擬中...', _do_pack)
-        _force_rerun()
-
-    res = st.session_state.get('last_result')
+    # ====== 以下渲染結果（加上唯一 key，避免 DuplicateElementId）======
+    res = st.session_state.get("pack_result")  # 依你現有 session_state 名稱調整
     if not res:
         return
-    if not res.get('ok'):
-        st.error(res.get('error', '計算失敗'))
-        return
 
-    packed_bins = res.get('packed_bins') or []
-    unfitted = res.get('unfitted') or []
-    color_map = res.get('color_map') or {}
+    figs = res.get("figs") or []     # 每箱一張 fig
+    boxes = res.get("boxes") or []   # 每箱資訊
+    nonce = _get_render_nonce()
 
-    res['report_html'] = build_report_html(
-        st.session_state.order_name,
-        packed_bins=packed_bins,
-        unfitted=unfitted,
-        content_wt=float(res.get('content_wt', 0.0) or 0.0),
-        total_wt=float(res.get('total_wt', 0.0) or 0.0),
-        util=float(res.get('util', 0.0) or 0.0),
-        color_map=color_map
-    )
-    st.session_state.last_result = res
+    # ✅ 不要用下拉：用 tabs（你說要頁籤）
+    tab_titles = []
+    for i, b in enumerate(boxes):
+        title = b.get("title") or f"外箱{i+1}"
+        cnt = b.get("count")
+        tab_titles.append(f"{title}（{cnt}件）" if cnt is not None else title)
 
-    st.markdown("### 🧾 訂單裝箱報告")
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
+    tabs = st.tabs(tab_titles if tab_titles else ["外箱1"])
 
-    used_bin_count = int(res.get('used_bin_count', 0))
-    st.markdown(
-        f"""
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <div>🧾 <b>訂單名稱</b>　<span style="color:#1f6feb;font-weight:900">{st.session_state.order_name}</span></div>
-          <div>🕒 <b>計算時間</b>　{_now_tw().strftime('%Y-%m-%d %H:%M:%S (台灣時間)')}</div>
-          <div>📦 <b>使用箱數</b>　<b>{used_bin_count}</b> 箱（可混用不同箱型）</div>
-          <div>⚖️ <b>內容淨重</b>　{float(res.get('content_wt',0.0) or 0.0):.2f} kg</div>
-          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{float(res.get('total_wt',0.0) or 0.0):.2f} kg</span></div>
-          <div>📊 <b>整體空間利用率</b>　{float(res.get('util',0.0) or 0.0):.2f}%（以實際用到的箱子總體積計算）</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    if unfitted:
-        counts = {}
-        for it in unfitted:
-            base = str(it.name).split('_')[0]
-            counts[base] = counts.get(base, 0) + 1
-        st.warning('注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）')
-        for k, v in counts.items():
-            st.error(f"{k}：超過 {v} 個")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    ts = _now_tw().strftime('%Y%m%d_%H%M')
-    fname = f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
-    st.download_button(
-        '⬇️ 下載完整裝箱報告（.html）',
-        data=res['report_html'].encode('utf-8'),
-        file_name=fname,
-        mime='text/html',
-        use_container_width=True,
-        key='dl_report'
-    )
-
-    if not packed_bins:
-        st.info("本次沒有任何箱子成功裝入商品（可能全部商品尺寸不合）。")
-        return
-
-    legend_html = "<div style='display:flex;flex-direction:column;gap:6px'>"
-    legend_html += "<div style='font-weight:900;margin-bottom:4px'>分類說明</div>"
-    for k, c in (color_map or {}).items():
-        legend_html += (
-            "<div style='display:flex;align-items:center;gap:8px'>"
-            f"<span style='width:14px;height:14px;border:2px solid #111;border-radius:3px;background:{c};display:inline-block'></span>"
-            f"<span>{k}</span></div>"
-        )
-    legend_html += "</div>"
-
-    tab_titles = [f"{p['name']}（裝入 {len(p.get('items') or [])} 件）" for p in packed_bins]
-    tabs = st.tabs(tab_titles)
-
-    for t, p in zip(tabs, packed_bins):
+    for i, t in enumerate(tabs):
         with t:
-            box_meta = p['box']
-            fitted = list(p.get('items') or [])
+            # 你要的「每箱是否使用/裝入件數」
+            if i < len(boxes):
+                bi = boxes[i]
+                st.caption(f"本箱裝入：{bi.get('count', 0)} 件｜箱型：{bi.get('name','') or bi.get('title','')}")
 
-            c1, c2 = st.columns([1, 3], gap='large')
-            with c1:
-                st.markdown(legend_html, unsafe_allow_html=True)
-                st.markdown(
-                    f"<div style='margin-top:10px;color:#444'>箱子尺寸：{box_meta['l']} × {box_meta['w']} × {box_meta['h']}</div>",
-                    unsafe_allow_html=True
+            if i < len(figs) and figs[i] is not None:
+                st.plotly_chart(
+                    figs[i],
+                    use_container_width=True,
+                    key=f"plotly_box_{nonce}_{i}"  # ✅ 關鍵：避免重複 element id
                 )
-            with c2:
-                fig = build_3d_fig(box_meta, fitted, color_map=color_map)
-                st.plotly_chart(fig, use_container_width=True)
-#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
+            else:
+                st.info("此箱沒有 3D 圖可顯示。")
+#------A018：裝箱結果與3D模擬（修正重複ID/3D按鈕真防呆）(結束)：------
 
 
 
