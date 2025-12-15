@@ -269,7 +269,7 @@ def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload,
         st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
     names=['(無)']+sorted(gas.list_names(sheet))
-    c1,c2=st.columns([1,1.25],gap='medium')
+    c1,c2=st.columns([1.25,1],gap='medium')
     with c1:
         sel=st.selectbox('選擇模板', names, key=f'{key_prefix}_sel')
         load_btn=st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load')
