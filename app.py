@@ -86,98 +86,118 @@ def _loading_watchdog(timeout_sec: int = 60):
 #------A004：共用工具/Action/Overlay（必裝）(開始)：------
 import time
 import uuid
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import streamlit as st
 
-def _now_tw() -> datetime:
-    """台灣時間 now。"""
-    return datetime.now(ZoneInfo("Asia/Taipei"))
-
 def _get_render_nonce() -> str:
-    """
-    取得「本次 rerun」用的唯一 nonce（避免 plotly 重複 element id）。
-    每次 rerun 都會變，確保 st.plotly_chart(key=...) 不重複。
-    """
+    # 用於產生唯一 key（避免 DuplicateElementId）
     if "_render_nonce" not in st.session_state:
         st.session_state["_render_nonce"] = uuid.uuid4().hex[:10]
     return st.session_state["_render_nonce"]
 
 def _bump_render_nonce():
-    """強制換 nonce（例如按鈕觸發後想保證下一輪 key 完全不同）。"""
     st.session_state["_render_nonce"] = uuid.uuid4().hex[:10]
 
-# ===== 真・防呆 Action 機制（按下按鈕 → 下一輪才做耗時工作）=====
-def _trigger(action: str, message: str = "處理中，請稍候..."):
+def _trigger(action: str, message: str = "處理中..."):
+    # ✅ 第一段：立刻寫入狀態 + 立刻 rerun，讓遮罩「馬上出現」
     st.session_state["_pending_action"] = action
-    st.session_state["_pending_payload"] = {}
-    st.session_state["_pending_message"] = message
-    st.session_state["_busy"] = True
-    _bump_render_nonce()          # 避免 UI 元件 key 重複
-    st.rerun()                    # 立刻 rerun → 下一輪顯示遮罩並執行
+    st.session_state["_pending_payload"] = {"message": message, "ts": time.time()}
+    st.session_state["_loading"] = True
+    st.session_state["_loading_msg"] = message
+    st.session_state["_loading_started"] = time.time()
+    st.session_state["_loading_nonce"] = uuid.uuid4().hex[:8]
+    st.rerun()
 
 def _has_action() -> bool:
     return bool(st.session_state.get("_pending_action"))
 
-def _consume_action():
-    act = st.session_state.get("_pending_action")
-    payload = st.session_state.get("_pending_payload") or {}
-    msg = st.session_state.get("_pending_message") or "處理中，請稍候..."
-    st.session_state["_pending_action"] = None
-    st.session_state["_pending_payload"] = {}
-    return act, payload, msg
+def _handle_action(action_map: dict):
+    # ✅ 第二段：在 rerun 後真正執行耗時工作（並且確保結束才解除遮罩）
+    if not _has_action():
+        return
 
-def _render_fullpage_overlay(msg: str):
-    """
-    全頁遮罩（真防呆）：使用者看得到 + 也真的不能操作（至少視覺上與點擊上）。
-    Streamlit 沒有真正 global disable，遮罩是最穩的做法。
-    """
+    action = st.session_state.get("_pending_action")
+    payload = st.session_state.get("_pending_payload") or {}
+    fn = action_map.get(action)
+
+    try:
+        if fn is None:
+            raise RuntimeError(f"找不到 action handler：{action}")
+        fn(payload)  # 真的做事
+    finally:
+        # ✅ 不管成功失敗，都要清 action，避免一直重跑
+        st.session_state["_pending_action"] = None
+        st.session_state["_pending_payload"] = None
+        st.session_state["_loading"] = False
+        st.session_state["_loading_msg"] = ""
+        st.session_state["_loading_started"] = None
+        # ✅ 結束後 bump nonce，避免 plotly/元件 key 撞到
+        _bump_render_nonce()
+
+def _render_fullpage_overlay():
+    if not st.session_state.get("_loading"):
+        return
+
+    msg = st.session_state.get("_loading_msg") or "處理中..."
+    nonce = st.session_state.get("_loading_nonce") or "x"
+
     st.markdown(
         f"""
         <style>
-        ._oai_overlay {{
-            position: fixed; inset: 0;
-            background: rgba(255,255,255,0.75);
+        .yimimi-overlay {{
+            position: fixed;
+            inset: 0;
             z-index: 999999;
-            display:flex; align-items:center; justify-content:center;
-            pointer-events: all;
+            background: rgba(255,255,255,0.75);
+            backdrop-filter: blur(2px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }}
-        ._oai_overlay .box {{
-            background:#fff; border:1px solid #e5e7eb;
-            border-radius:12px; padding:18px 22px;
-            box-shadow:0 10px 30px rgba(0,0,0,0.10);
-            font-size:16px;
+        .yimimi-card {{
+            background: white;
+            border: 1px solid rgba(0,0,0,0.08);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.10);
+            border-radius: 14px;
+            padding: 18px 20px;
+            min-width: 280px;
+            max-width: 520px;
+            text-align: center;
         }}
+        .yimimi-spinner {{
+            width: 26px; height: 26px;
+            border: 3px solid rgba(0,0,0,0.12);
+            border-top-color: rgba(0,0,0,0.55);
+            border-radius: 50%;
+            margin: 0 auto 10px auto;
+            animation: spin 0.9s linear infinite;
+        }}
+        @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
         </style>
-        <div class="_oai_overlay">
-          <div class="box">⏳ {msg}</div>
+        <div class="yimimi-overlay" id="yimimi_overlay_{nonce}">
+          <div class="yimimi-card">
+            <div class="yimimi-spinner"></div>
+            <div style="font-weight:700; font-size:16px;">讀取中...</div>
+            <div style="margin-top:6px; font-size:13px; opacity:.8;">{msg}</div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-def _handle_action(handler_map: dict):
-    """
-    必須在 main() 的很前面呼叫：
-    - 先顯示遮罩
-    - 再執行耗時動作
-    - 做完解除 busy
-    - 再 rerun 讓畫面「確定更新完」才解除遮罩
-    """
-    if not _has_action():
+def _loading_watchdog(timeout_sec: int = 60):
+    # ✅ 避免因例外造成遮罩永遠不消失
+    if not st.session_state.get("_loading"):
         return
-
-    act, payload, msg = _consume_action()
-    _render_fullpage_overlay(msg)
-
-    try:
-        fn = handler_map.get(act)
-        if fn:
-            fn(payload)
-    finally:
-        st.session_state["_busy"] = False
+    started = st.session_state.get("_loading_started")
+    if not started:
+        return
+    if time.time() - float(started) > timeout_sec:
+        st.session_state["_loading"] = False
+        st.session_state["_pending_action"] = None
+        st.session_state["_pending_payload"] = None
+        st.session_state["_loading_msg"] = ""
+        st.session_state["_loading_started"] = None
         _bump_render_nonce()
-        st.rerun()
 #------A004：共用工具/Action/Overlay（必裝）(結束)：------
 
 
@@ -260,75 +280,63 @@ def _end_loading():
 
 
 #------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(開始)：------
-import os
-import requests
+import json
+import urllib.request
+import urllib.parse
 
-def _get_secret(name: str, default: str = "") -> str:
-    """
-    ✅ 先讀 st.secrets，再讀環境變數，避免本機/雲端不同環境造成爆炸
-    """
+# ✅ 不改你原本 secrets 的 key，只做「安全讀取」
+def _secret_get(key: str, default=""):
     try:
-        v = st.secrets.get(name, None)
-        if v is not None:
-            return str(v)
+        return st.secrets.get(key, default)
     except Exception:
-        pass
-    return str(os.environ.get(name, default) or default)
+        return default
+
+# ✅ 這兩個一定要「永遠存在」，否則 template_block 會 NameError
+GAS_URL = _secret_get("GAS_URL", "")
+GAS_TOKEN = _secret_get("GAS_TOKEN", "")
 
 class GASClient:
-    """
-    Google Apps Script Web App（或你自己的 GAS API）呼叫器
-    你原本程式只要需要 gas.post({...}) / gas.get(...) 就能用
-    """
-    def __init__(self, url: str, token: str = "", timeout: int = 30):
+    def __init__(self, url: str, token: str):
         self.url = (url or "").strip()
         self.token = (token or "").strip()
-        self.timeout = int(timeout)
 
-    def _headers(self) -> dict:
-        h = {"Content-Type": "application/json"}
-        if self.token:
-            # 你原本用什麼 header 驗證就放這裡（常見：Authorization: Bearer）
-            h["Authorization"] = f"Bearer {self.token}"
-        return h
+    def ok(self) -> bool:
+        return bool(self.url) and bool(self.token)
 
-    def post(self, payload: dict) -> dict:
-        """
-        ✅ 依你原本的 GAS 方式：傳 JSON payload 給 GAS_URL
-        """
-        if not self.url:
-            raise RuntimeError("GAS_URL 未設定，無法呼叫 GAS。")
-        r = requests.post(self.url, json=payload, headers=self._headers(), timeout=self.timeout)
-        r.raise_for_status()
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": False, "raw": r.text}
+    def _post(self, payload: dict, timeout: int = 30):
+        if not self.ok():
+            raise RuntimeError("尚未設定 GAS_URL / GAS_TOKEN（Secrets）或設定為空，無法讀取模板。")
 
-    def get(self, params: dict) -> dict:
-        if not self.url:
-            raise RuntimeError("GAS_URL 未設定，無法呼叫 GAS。")
-        r = requests.get(self.url, params=params, headers=self._headers(), timeout=self.timeout)
-        r.raise_for_status()
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": False, "raw": r.text}
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self.url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "X-Token": self.token,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            return json.loads(raw) if raw else {}
 
+    def list_templates(self, sheet: str):
+        return self._post({"op": "list", "sheet": sheet})
 
-# ✅ 安全初始化：沒設定就不要讓程式直接死掉
-GAS_URL = _get_secret("GAS_URL", "")
-GAS_TOKEN = _get_secret("GAS_TOKEN", "")
+    def load_template(self, sheet: str, name: str):
+        return self._post({"op": "load", "sheet": sheet, "name": name})
 
-gas = None
-if GAS_URL:
-    try:
-        gas = GASClient(GAS_URL, GAS_TOKEN)
-    except Exception as e:
-        # 不要讓整頁爆掉，改成後續 UI 顯示錯誤
-        st.session_state["_gas_init_error"] = str(e)
-        gas = None
+    def save_template(self, sheet: str, name: str, data: dict):
+        return self._post({"op": "save", "sheet": sheet, "name": name, "data": data})
+
+    def delete_template(self, sheet: str, name: str):
+        return self._post({"op": "delete", "sheet": sheet, "name": name})
+
+# ✅ 也要確保 gas 物件永遠可用（但不會因 secrets 空值就直接讓整個 app 全白）
+gas = GASClient(GAS_URL, GAS_TOKEN)
 #------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(結束)：------
+
 
 #------A006b：GAS 快取輔助（list/get/save/delete + clear cache）(開始)：------
 @st.cache_resource(show_spinner=False)
@@ -388,80 +396,65 @@ def _gas_cache_clear():
 
 
 #------A007：外箱資料清理/防呆(開始)：------
-def _to_float(v, default: float = 0.0) -> float:
-    """把各種輸入(字串/None/數字)安全轉 float；失敗回 default。"""
+import pandas as pd
+import numpy as np
+
+def _to_float(x, default=0.0):
     try:
-        if v is None:
+        if x is None:
             return float(default)
-        # Streamlit data_editor 可能回傳 numpy / pandas 型別
-        if isinstance(v, (int, float)):
-            return float(v)
-        s = str(v).strip()
-        if s == "":
+        if isinstance(x, (int, float, np.number)):
+            return float(x)
+        s = str(x).strip()
+        if s == "" or s.lower() in ("nan", "none", "null"):
             return float(default)
-        # 去掉常見分隔符號
+        # 允許「1,234.5」
         s = s.replace(",", "")
         return float(s)
     except Exception:
         return float(default)
 
-def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    外箱表格清理：
-    - 補齊欄位
-    - 轉型
-    - 移除空白列
-    - 不強塞預設值（清完是空就回空）
-    """
-    cols = ["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]
-
+def _sanitize_box(df: "pd.DataFrame") -> "pd.DataFrame":
     if df is None:
-        df = pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=["名稱","長","寬","高","數量","空箱重量"])
 
     df = df.copy()
 
-    # 補欄位
-    for c in cols:
-        if c not in df.columns:
-            df[c] = "" if c == "名稱" else 0
+    # ✅ 兼容不同欄名（如果你原本不是中文欄名也能撐住）
+    rename_map = {}
+    for c in df.columns:
+        cc = str(c).strip()
+        if cc in ("name", "箱名"):
+            rename_map[c] = "名稱"
+        elif cc in ("L", "length", "長度"):
+            rename_map[c] = "長"
+        elif cc in ("W", "width", "寬度"):
+            rename_map[c] = "寬"
+        elif cc in ("H", "height", "高度"):
+            rename_map[c] = "高"
+        elif cc in ("qty", "count"):
+            rename_map[c] = "數量"
+        elif cc in ("tare", "empty_weight"):
+            rename_map[c] = "空箱重量"
+    if rename_map:
+        df = df.rename(columns=rename_map)
 
-    # 僅保留順序一致欄位
-    df = df[cols]
+    # ✅ 確保必備欄位存在
+    for col in ["名稱","長","寬","高","數量","空箱重量"]:
+        if col not in df.columns:
+            df[col] = "" if col == "名稱" else 0
 
-    # 先把 NaN/None 變成空字串，避免 apply 時噴型別錯
-    df = df.fillna("")
+    # ✅ 型別清理
+    for col in ["長","寬","高","數量","空箱重量"]:
+        df[col] = df[col].apply(_to_float)
 
-    # 空表直接回傳空表（不要硬塞預設外箱）
-    if df.empty:
-        return pd.DataFrame(columns=cols)
+    # ✅ 數量至少 0、長寬高至少 0
+    df["數量"] = df["數量"].apply(lambda v: max(0, int(round(v))))
+    for col in ["長","寬","高","空箱重量"]:
+        df[col] = df[col].apply(lambda v: max(0.0, float(v)))
 
-    # 選取轉 bool（容錯：'TRUE'/'False'/1/0）
-    def _to_bool(x):
-        if isinstance(x, bool):
-            return x
-        s = str(x).strip().lower()
-        return s in ("1", "true", "t", "yes", "y", "✅")
-
-    df["選取"] = df["選取"].apply(_to_bool)
-
-    # 名稱轉字串
-    df["名稱"] = df["名稱"].apply(lambda x: str(x).strip() if x is not None else "")
-
-    # 尺寸重量轉 float；數量轉 int
-    for c in ["長", "寬", "高", "空箱重量"]:
-        df[c] = df[c].apply(lambda x: _to_float(x, 0.0))
-
-    df["數量"] = df["數量"].apply(lambda x: int(_to_float(x, 0.0)))
-
-    # 判斷空白列：名稱空 + 尺寸全 0 + 數量 0
-    def _is_empty_row(r):
-        return (r["名稱"] == "") and (r["長"] == 0) and (r["寬"] == 0) and (r["高"] == 0) and (r["數量"] == 0)
-
-    df = df[~df.apply(_is_empty_row, axis=1)].reset_index(drop=True)
-
-    # 清完變空就回空（不回填預設）
-    if df.empty:
-        return pd.DataFrame(columns=cols)
+    # ✅ 名稱清理
+    df["名稱"] = df["名稱"].astype(str).fillna("").apply(lambda s: s.strip())
 
     return df
 #------A007：外箱資料清理/防呆(結束)：------
@@ -1221,91 +1214,101 @@ def _total_items(df_prod:pd.DataFrame)->int:
 #------A017：商品總件數統計(用於檔名)(結束)：------
 
 
-#------A018：裝箱結果與3D模擬（頁籤顯示 + 真防呆 + Plotly key 唯一）(開始)：------
+#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(開始)：------
 def result_block():
-    # ✅ 先處理「上一輪按鈕」觸發的耗時動作（這一輪會先顯示遮罩，再運算，完成後 rerun）
+    # 先顯示標題
+    st.markdown("## 3. 裝箱結果與模擬")
+
+    # ✅ 第二段：如果上一輪按了按鈕，這輪就在這裡真的執行（遮罩已經在上一輪立刻出現）
     def _do_run_3d(_payload: dict):
-        df_box = st.session_state.get("df_box")
-        df_item = st.session_state.get("df_item")
-        if df_box is None or df_item is None or len(df_box) == 0 or len(df_item) == 0:
-            st.warning("請先確認已勾選外箱與商品，且表格資料不為空。")
-            st.session_state["pack_result"] = None
-            return
-
-        # 你原本的裝箱運算（沿用既有函式）
-        res = compute_packing(df_box, df_item)
-        st.session_state["pack_result"] = res
-
-        # 產生報告 HTML（若你原本有這個功能）
+        # 這裡用你檔案內「已存在」的 pack_and_render
+        # 重要：請不要在 st.button 當輪直接跑，避免遮罩慢半拍
         try:
-            if res:
-                st.session_state["report_html"] = build_report_html(
-                    st.session_state.get("order_name", ""),
-                    res,
-                    color_map=st.session_state.get("color_map", {}),
-                )
-        except Exception:
-            # 報告失敗不該讓整個 App 掛掉
-            st.session_state["report_html"] = ""
+            df_box = st.session_state.get("df_box")
+            df_prod = st.session_state.get("df_prod")
+            # 如果你有前面 sanitize，這裡也可以再保護一次
+            if df_box is None or df_prod is None:
+                raise RuntimeError("找不到 df_box / df_prod，請先確認外箱與商品表格已有資料。")
+
+            # ✅ 真正耗時計算
+            pack_and_render()
+
+        finally:
+            # pack_and_render() 裡若會寫入 st.session_state.pack_result / report_html 等，就讓它自然更新
+            pass
 
     _handle_action({
         "RUN_3D": _do_run_3d,
     })
 
-    st.markdown("## 3. 裝箱結果與模擬")
-
-    # ✅ 按下按鈕：立刻 rerun → 下一輪顯示遮罩並運算
-    if st.button("🚀 開始計算與 3D 模擬", use_container_width=True, key=f"btn_run3d_{_get_render_nonce()}"):
+    # ✅ 第一段：按下按鈕立刻出現遮罩，下一輪才做耗時工作
+    if st.button(
+        "🚀 開始計算與 3D 模擬",
+        use_container_width=True,
+        key=f"btn_run3d_{_get_render_nonce()}",
+        disabled=bool(st.session_state.get("_loading")),
+    ):
         _trigger("RUN_3D", "正在計算與產生 3D 模擬，請稍候...")
 
+    # ====== 以下渲染結果 ======
     res = st.session_state.get("pack_result")
     if not res:
-        st.info("尚未產生裝箱結果。請點擊上方按鈕開始計算。")
+        st.info("尚未計算 3D。請按上方「開始計算與 3D 模擬」。")
         return
 
     figs = res.get("figs") or []
     boxes = res.get("boxes") or []
-    nonce = _get_render_nonce()
+    color_map = res.get("color_map") or {}  # 你的顏色對照表（若有）
 
-    # ✅ 用頁籤顯示每一箱（不要下拉）
+    # ✅ legend（分類顏色說明）如果你本來有一段 legend_html，就沿用
+    # 這裡用最保險方式：有 legend_html 就顯示，沒有就顯示 color_map
+    legend_html = res.get("legend_html")
+
+    run_id = _get_render_nonce()  # 每次 action 結束會 bump，避免 key 撞
+
+    # ✅ 頁籤標題：顯示每箱件數
     tab_titles = []
     for i, b in enumerate(boxes):
         title = b.get("title") or b.get("name") or f"外箱{i+1}"
-        cnt = b.get("count", None)
+        cnt = b.get("count")
         tab_titles.append(f"{title}（{cnt}件）" if cnt is not None else title)
 
     tabs = st.tabs(tab_titles if tab_titles else ["外箱1"])
 
     for i, t in enumerate(tabs):
         with t:
-            # ✅ 每箱是否被使用/裝入件數（清楚顯示）
-            if i < len(boxes):
-                bi = boxes[i]
-                used = "是" if bi.get("count", 0) > 0 else "否"
-                st.caption(
-                    f"使用：{used} ｜裝入：{bi.get('count', 0)} 件"
-                    f" ｜箱型：{bi.get('name','') or bi.get('title','')}"
-                )
+            c1, c2 = st.columns([0.25, 0.75], gap="large")
 
-            # ✅ 3D 圖（Plotly 一定要 key，避免 DuplicateElementId）
-            if i < len(figs) and figs[i] is not None:
-                st.plotly_chart(
-                    figs[i],
-                    use_container_width=True,
-                    key=f"plotly_box_{nonce}_{i}",
-                )
-            else:
-                st.info("此箱沒有 3D 圖可顯示。")
+            with c1:
+                st.markdown("### 分類顏色說明")
+                if legend_html:
+                    st.markdown(legend_html, unsafe_allow_html=True)
+                else:
+                    if not color_map:
+                        st.caption("（尚無分類顏色資料）")
+                    else:
+                        for k, v in color_map.items():
+                            st.markdown(f"- **{k}**：`{v}`")
 
-            # ✅ 旁邊分類顏色說明（你原本的 color_map）
-            cm = st.session_state.get("color_map") or res.get("color_map") or {}
-            if cm:
-                st.markdown("### 分類顏色對照")
-                for k, v in cm.items():
-                    st.markdown(f"- **{k}**：`{v}`")
-#------A018：裝箱結果與3D模擬（頁籤顯示 + 真防呆 + Plotly key 唯一）(結束)：------
+                # ✅ 每箱資訊
+                if i < len(boxes):
+                    bi = boxes[i]
+                    st.markdown("### 本箱資訊")
+                    st.write(f"裝入件數：**{bi.get('count', 0)}** 件")
+                    if bi.get("name") or bi.get("title"):
+                        st.write(f"箱型：**{bi.get('name') or bi.get('title')}**")
 
-
+            with c2:
+                if i < len(figs) and figs[i] is not None:
+                    # ✅ 這裡「一定要 key」，避免箱子多/商品多就爆 DuplicateElementId
+                    st.plotly_chart(
+                        figs[i],
+                        use_container_width=True,
+                        key=f"plotly_box_{run_id}_{i}",
+                    )
+                else:
+                    st.info("此箱沒有 3D 圖可顯示。")
+#------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
 
