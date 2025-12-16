@@ -439,58 +439,171 @@ def _gas_cache_clear():
 #------A006b：GAS 快取輔助（list/get/save/delete + clear cache）(結束)：------
 
 
-#------A007：資料清理與防呆（避免 NameError / 非數字崩潰）(開始)：------
-def _to_float(x, default=0.0) -> float:
+#------A007：Action/真防呆遮罩系統（整段可取代 / 修正 _has_action NameError / 真更新 / 全頁遮罩）(開始)：------
+import time
+import streamlit as st
+
+# 這個 action 系統的設計：
+# 1) 按鈕被按下的當輪：只做 _trigger() -> 立刻 rerun
+# 2) 下一輪：先顯示遮罩（整頁不可操作）-> 再執行耗時工作 -> 結束後清 action -> rerun
+# => 你要的「真的在運作中才防呆、結束後才解除」就是靠這樣做
+
+_ACTION_KEY = "__action__"
+_OVERLAY_KEY = "__overlay__"
+_LAST_DONE_KEY = "__action_last_done_ts__"
+
+def _ensure_action_defaults():
+    if _ACTION_KEY not in st.session_state:
+        st.session_state[_ACTION_KEY] = None
+    if _OVERLAY_KEY not in st.session_state:
+        st.session_state[_OVERLAY_KEY] = False
+    if _LAST_DONE_KEY not in st.session_state:
+        st.session_state[_LAST_DONE_KEY] = 0.0
+
+def _has_action() -> bool:
+    _ensure_action_defaults()
+    return st.session_state.get(_ACTION_KEY) is not None
+
+def _get_action() -> dict | None:
+    _ensure_action_defaults()
+    a = st.session_state.get(_ACTION_KEY)
+    return a if isinstance(a, dict) else None
+
+def _clear_action():
+    _ensure_action_defaults()
+    st.session_state[_ACTION_KEY] = None
+    st.session_state[_OVERLAY_KEY] = False
+    st.session_state[_LAST_DONE_KEY] = time.time()
+
+def _trigger(action_name: str, message: str = "處理中，請稍候...", payload: dict | None = None):
+    """
+    ✅ 按鈕當輪呼叫：只登記 action + 開遮罩 + rerun
+    """
+    _ensure_action_defaults()
+    st.session_state[_ACTION_KEY] = {
+        "name": action_name,
+        "message": message,
+        "payload": payload or {},
+        "ts": time.time(),
+    }
+    st.session_state[_OVERLAY_KEY] = True
+    st.rerun()
+
+def _render_fullpage_overlay(message: str = "處理中，請稍候..."):
+    """
+    ✅ 全頁遮罩：視覺上 + 操作上都不可點（靠 pointer-events）
+    """
+    st.markdown(
+        """
+        <style>
+        .yimimi-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255,255,255,0.85);
+            z-index: 999999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: all;
+        }
+        .yimimi-overlay-card{
+            background: white;
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 12px;
+            padding: 16px 18px;
+            min-width: 280px;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.10);
+            text-align: center;
+        }
+        .yimimi-overlay-title{
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .yimimi-overlay-sub{
+            font-size: 13px;
+            opacity: 0.75;
+            margin-top: 8px;
+        }
+        .yimimi-spinner{
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            border: 4px solid rgba(0,0,0,0.10);
+            border-top-color: rgba(0,0,0,0.55);
+            animation: yimimi-spin 0.9s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes yimimi-spin { to { transform: rotate(360deg); } }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    safe_msg = (message or "處理中，請稍候...").replace("<", "&lt;").replace(">", "&gt;")
+    st.markdown(
+        f"""
+        <div class="yimimi-overlay">
+          <div class="yimimi-overlay-card">
+            <div class="yimimi-spinner"></div>
+            <div class="yimimi-overlay-title">{safe_msg}</div>
+            <div class="yimimi-overlay-sub">請勿重新整理或切換模板，系統正在更新資料…</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def _loading_watchdog(timeout_sec: int = 60):
+    """
+    ✅ 避免遮罩卡死（例如 action 執行中爆錯，下一輪還卡著）
+    - 超過 timeout 就自動解除遮罩 + 清 action
+    """
+    _ensure_action_defaults()
+    a = _get_action()
+    if not a:
+        return
+    ts = float(a.get("ts", 0) or 0)
+    if ts and (time.time() - ts) > timeout_sec:
+        st.warning("⚠ 讀取逾時，已自動解除防呆。請再操作一次。")
+        _clear_action()
+        st.rerun()
+
+def _handle_action(handlers: dict[str, callable]):
+    """
+    ✅ 在 main() 一開始呼叫（越早越好）：
+    - 這輪如果有 action：先顯示遮罩 -> 執行對應 handler -> 完成後 rerun
+    """
+    _ensure_action_defaults()
+
+    a = _get_action()
+    if not a:
+        return
+
+    # 先顯示遮罩（這輪 UI 一開始就看到）
+    msg = a.get("message") or "處理中，請稍候..."
+    if st.session_state.get(_OVERLAY_KEY, False):
+        _render_fullpage_overlay(msg)
+
+    name = a.get("name")
+    payload = a.get("payload") or {}
+
+    # 執行 handler
+    fn = handlers.get(name)
     try:
-        if x is None:
-            return float(default)
-        if isinstance(x, (int, float)):
-            return float(x)
-        s = str(x).strip()
-        if s == "":
-            return float(default)
-        return float(s)
-    except Exception:
-        return float(default)
+        if fn is None:
+            raise NameError(f"找不到 action handler：{name}")
+        fn(payload)  # 真正耗時工作放這裡
+        _clear_action()
+        st.rerun()
+    except Exception as e:
+        # 失敗：解除遮罩/清 action，但不要整頁白掉
+        st.session_state[_OVERLAY_KEY] = False
+        st.session_state[_ACTION_KEY] = None
+        st.error(f"❌ 執行失敗：{e}")
+        # 不強制 rerun，讓錯誤留在畫面上
 
-def _to_int(x, default=0) -> int:
-    try:
-        if x is None:
-            return int(default)
-        if isinstance(x, int):
-            return int(x)
-        if isinstance(x, float):
-            return int(x)
-        s = str(x).strip()
-        if s == "":
-            return int(default)
-        return int(float(s))
-    except Exception:
-        return int(default)
-
-def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    # 這些欄位都保證轉成數字，不會因為空白/字串爆掉
-    for c in ["長", "寬", "高", "空箱重量"]:
-        if c in df.columns:
-            df[c] = df[c].apply(_to_float)
-    if "數量" in df.columns:
-        df["數量"] = df["數量"].apply(_to_int)
-    if "選取" in df.columns:
-        df["選取"] = df["選取"].fillna(False).astype(bool)
-    return df
-
-def _sanitize_prod(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    for c in ["長", "寬", "高", "重量(kg)"]:
-        if c in df.columns:
-            df[c] = df[c].apply(_to_float)
-    if "數量" in df.columns:
-        df["數量"] = df["數量"].apply(_to_int)
-    if "選取" in df.columns:
-        df["選取"] = df["選取"].fillna(False).astype(bool)
-    return df
-#------A007：資料清理與防呆（避免 NameError / 非數字崩潰）(結束)：------
+#------A007：Action/真防呆遮罩系統（整段可取代 / 修正 _has_action NameError / 真更新 / 全頁遮罩）(結束)：------
 
 
 
