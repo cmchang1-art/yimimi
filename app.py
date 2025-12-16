@@ -350,115 +350,58 @@ def _gas_cache_clear():
 
 
 
-#------A007：Action/真防呆遮罩系統（整段可取代 / 修正 _has_action NameError / 真更新 / 全頁遮罩）(開始)：------
+#------A007：Action / 真防呆 Loading Overlay / Watchdog（完整可用版）(開始)：------
 import time
+import traceback
 import streamlit as st
 
-# 這個 action 系統的設計：
-# 1) 按鈕被按下的當輪：只做 _trigger() -> 立刻 rerun
-# 2) 下一輪：先顯示遮罩（整頁不可操作）-> 再執行耗時工作 -> 結束後清 action -> rerun
-# => 你要的「真的在運作中才防呆、結束後才解除」就是靠這樣做
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
-_ACTION_KEY = "__action__"
-_OVERLAY_KEY = "__overlay__"
-_LAST_DONE_KEY = "__action_last_done_ts__"
+def _ensure_defaults():
+    ss = st.session_state
+    ss.setdefault("layout_mode", "左右 50% / 50%")
+    ss.setdefault("order_name", f"訂單_{time.strftime('%Y%m%d')}")
+    ss.setdefault("_action", None)         # {"type": "...", "payload": {...}}
+    ss.setdefault("_loading", False)       # bool
+    ss.setdefault("_loading_msg", "")      # str
+    ss.setdefault("_loading_since", 0)     # ms
+    ss.setdefault("_render_nonce", 0)      # int（plotly key 用）
 
-def _ensure_action_defaults():
-    if _ACTION_KEY not in st.session_state:
-        st.session_state[_ACTION_KEY] = None
-    if _OVERLAY_KEY not in st.session_state:
-        st.session_state[_OVERLAY_KEY] = False
-    if _LAST_DONE_KEY not in st.session_state:
-        st.session_state[_LAST_DONE_KEY] = 0.0
+def _is_loading() -> bool:
+    return bool(st.session_state.get("_loading", False))
 
 def _has_action() -> bool:
-    _ensure_action_defaults()
-    return st.session_state.get(_ACTION_KEY) is not None
+    a = st.session_state.get("_action")
+    return isinstance(a, dict) and bool(a.get("type"))
 
-def _get_action() -> dict | None:
-    _ensure_action_defaults()
-    a = st.session_state.get(_ACTION_KEY)
-    return a if isinstance(a, dict) else None
+def _set_loading(on: bool, msg: str = ""):
+    st.session_state["_loading"] = bool(on)
+    st.session_state["_loading_msg"] = msg or ""
+    if on:
+        st.session_state["_loading_since"] = _now_ms()
 
-def _clear_action():
-    _ensure_action_defaults()
-    st.session_state[_ACTION_KEY] = None
-    st.session_state[_OVERLAY_KEY] = False
-    st.session_state[_LAST_DONE_KEY] = time.time()
-
-def _trigger(action_name: str, message: str = "處理中，請稍候...", payload: dict | None = None):
+def _render_loading_overlay():
     """
-    ✅ 按鈕當輪呼叫：只登記 action + 開遮罩 + rerun
+    ✅ 全頁遮罩（真的防呆）：啟動時鎖住操作，直到 action 完成才解除
     """
-    _ensure_action_defaults()
-    st.session_state[_ACTION_KEY] = {
-        "name": action_name,
-        "message": message,
-        "payload": payload or {},
-        "ts": time.time(),
-    }
-    st.session_state[_OVERLAY_KEY] = True
-    st.rerun()
-
-def _render_fullpage_overlay(message: str = "處理中，請稍候..."):
-    """
-    ✅ 全頁遮罩：視覺上 + 操作上都不可點（靠 pointer-events）
-    """
-    st.markdown(
-        """
-        <style>
-        .yimimi-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(255,255,255,0.85);
-            z-index: 999999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            pointer-events: all;
-        }
-        .yimimi-overlay-card{
-            background: white;
-            border: 1px solid rgba(0,0,0,0.08);
-            border-radius: 12px;
-            padding: 16px 18px;
-            min-width: 280px;
-            box-shadow: 0 8px 28px rgba(0,0,0,0.10);
-            text-align: center;
-        }
-        .yimimi-overlay-title{
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 10px;
-        }
-        .yimimi-overlay-sub{
-            font-size: 13px;
-            opacity: 0.75;
-            margin-top: 8px;
-        }
-        .yimimi-spinner{
-            width: 34px;
-            height: 34px;
-            border-radius: 999px;
-            border: 4px solid rgba(0,0,0,0.10);
-            border-top-color: rgba(0,0,0,0.55);
-            animation: yimimi-spin 0.9s linear infinite;
-            margin: 0 auto;
-        }
-        @keyframes yimimi-spin { to { transform: rotate(360deg); } }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    safe_msg = (message or "處理中，請稍候...").replace("<", "&lt;").replace(">", "&gt;")
+    msg = st.session_state.get("_loading_msg") or "處理中，請稍候..."
     st.markdown(
         f"""
-        <div class="yimimi-overlay">
-          <div class="yimimi-overlay-card">
-            <div class="yimimi-spinner"></div>
-            <div class="yimimi-overlay-title">{safe_msg}</div>
-            <div class="yimimi-overlay-sub">請勿重新整理或切換模板，系統正在更新資料…</div>
+        <div style="
+          position:fixed;inset:0;z-index:999999;
+          background:rgba(255,255,255,0.85);
+          display:flex;align-items:center;justify-content:center;
+        ">
+          <div style="
+            width:min(520px,92vw);
+            background:#fff;border:1px solid #eee;border-radius:18px;
+            padding:18px 18px;box-shadow:0 10px 30px rgba(0,0,0,0.08);
+            font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans TC',sans-serif;
+          ">
+            <div style="font-size:16px;font-weight:700;margin-bottom:8px;">⏳ 讀取中</div>
+            <div style="font-size:14px;line-height:1.6;color:#333;">{msg}</div>
+            <div style="margin-top:12px;font-size:12px;color:#777;">請不要關閉或重新整理頁面</div>
           </div>
         </div>
         """,
@@ -467,54 +410,56 @@ def _render_fullpage_overlay(message: str = "處理中，請稍候..."):
 
 def _loading_watchdog(timeout_sec: int = 60):
     """
-    ✅ 避免遮罩卡死（例如 action 執行中爆錯，下一輪還卡著）
-    - 超過 timeout 就自動解除遮罩 + 清 action
+    ✅ 避免 loading 卡死：超過 timeout 會自動解除並提示
     """
-    _ensure_action_defaults()
-    a = _get_action()
-    if not a:
+    if not _is_loading():
         return
-    ts = float(a.get("ts", 0) or 0)
-    if ts and (time.time() - ts) > timeout_sec:
-        st.warning("⚠ 讀取逾時，已自動解除防呆。請再操作一次。")
-        _clear_action()
-        st.rerun()
+    since = int(st.session_state.get("_loading_since") or 0)
+    if since <= 0:
+        return
+    if (_now_ms() - since) > timeout_sec * 1000:
+        _set_loading(False, "")
+        st.session_state["_action"] = None
+        st.error("⚠️ 讀取逾時，已自動解除防呆。請再試一次或查看 logs。")
 
-def _handle_action(handlers: dict[str, callable]):
+def _trigger(action_type: str, msg: str = "處理中，請稍候...", payload: dict | None = None):
     """
-    ✅ 在 main() 一開始呼叫（越早越好）：
-    - 這輪如果有 action：先顯示遮罩 -> 執行對應 handler -> 完成後 rerun
+    ✅ 按鈕當下：只做「掛 action + 開遮罩」，下一輪 rerun 才真的執行耗時計算
     """
-    _ensure_action_defaults()
+    st.session_state["_action"] = {"type": action_type, "payload": payload or {}}
+    _set_loading(True, msg)
+    st.rerun()
 
-    a = _get_action()
-    if not a:
+def _handle_action(handlers: dict):
+    """
+    ✅ 在下一輪執行 action，成功/失敗都會解除遮罩
+    handlers 例：{"RUN_3D": fn, "SAVE_BOX": fn2}
+    """
+    if not _has_action():
         return
 
-    # 先顯示遮罩（這輪 UI 一開始就看到）
-    msg = a.get("message") or "處理中，請稍候..."
-    if st.session_state.get(_OVERLAY_KEY, False):
-        _render_fullpage_overlay(msg)
-
-    name = a.get("name")
+    a = st.session_state.get("_action") or {}
+    t = a.get("type")
     payload = a.get("payload") or {}
 
-    # 執行 handler
-    fn = handlers.get(name)
-    try:
-        if fn is None:
-            raise NameError(f"找不到 action handler：{name}")
-        fn(payload)  # 真正耗時工作放這裡
-        _clear_action()
-        st.rerun()
-    except Exception as e:
-        # 失敗：解除遮罩/清 action，但不要整頁白掉
-        st.session_state[_OVERLAY_KEY] = False
-        st.session_state[_ACTION_KEY] = None
-        st.error(f"❌ 執行失敗：{e}")
-        # 不強制 rerun，讓錯誤留在畫面上
+    # 先清掉 action，避免重入
+    st.session_state["_action"] = None
 
-#------A007：Action/真防呆遮罩系統（整段可取代 / 修正 _has_action NameError / 真更新 / 全頁遮罩）(結束)：------
+    try:
+        fn = handlers.get(t)
+        if fn is None:
+            raise RuntimeError(f"Unknown action: {t}")
+        fn(payload)  # 真正做事（可耗時）
+        _set_loading(False, "")
+    except Exception as e:
+        _set_loading(False, "")
+        st.error(f"❌ 執行失敗：{e}")
+        st.code(traceback.format_exc())
+
+def _bump_render_nonce():
+    st.session_state["_render_nonce"] = int(st.session_state.get("_render_nonce", 0)) + 1
+    return st.session_state["_render_nonce"]
+#------A007：Action / 真防呆 Loading Overlay / Watchdog（完整可用版）(結束)：------
 
 
 
@@ -1448,17 +1393,16 @@ def result_block():
 
 
 
-#------A019：主程式 UI（版面配置：左右 / 上下）(開始)：------
+#------A019：主程式 UI（修正版：不再使用 main() 內的 if _has_action()）(開始)：------
 import streamlit as st
 
 def main():
-    # ✅ 先確保 session_state 有預設值
     _ensure_defaults()
 
-    # ✅ 如果正在 loading（保險）
+    # ✅ 只要 loading 就顯示遮罩（不卡 UI）
+    _loading_watchdog(timeout_sec=60)
     if _is_loading():
         _render_loading_overlay()
-        return
 
     st.title("📦 3D裝箱系統")
 
@@ -1506,7 +1450,7 @@ def main():
 
         st.divider()
         result_block()
-#------A019：主程式 UI（版面配置：左右 / 上下）(結束)：------
+#------A019：主程式 UI（修正版：不再使用 main() 內的 if _has_action()）(結束)：------
 
 
 #------A020：程式入口（避免覆蓋 main / 防止白屏）(開始)：------
