@@ -148,7 +148,9 @@ def _handle_action(handler_map: dict):
 #------A003：共用工具/Action/Overlay（真防呆核心）(結束)：------
 
 
-#------A004：GASClient（安全版，沒設定也不炸）(開始)：------
+#------A004：GASClient（自動相容版：POST/GET、多種欄位名）(開始)：------
+import traceback
+
 def _get_secret(name: str, default: str = "") -> str:
     try:
         v = st.secrets.get(name, None)
@@ -159,6 +161,13 @@ def _get_secret(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or default)
 
 class GASClient:
+    """
+    盡量相容常見 GAS Web App 寫法：
+    - POST JSON: {"op":"list","sheet":"..."} 或 {"action":"list",...} 或 {"mode":"list",...}
+    - GET query: ?op=list&sheet=...
+    - token 可能在 Header / payload / query
+    - 回傳可能是：{"ok":true,"names":[...]} 或 {"status":"ok","data":[...]} 等
+    """
     def __init__(self, url: str, token: str = "", timeout: int = 30):
         self.url = (url or "").strip()
         self.token = (token or "").strip()
@@ -171,58 +180,147 @@ class GASClient:
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}
         if self.token:
+            # 有些 GAS 會讀 Authorization
             h["Authorization"] = f"Bearer {self.token}"
         return h
 
-    def post(self, payload: dict) -> dict:
-        if not self.url:
-            return {"ok": False, "error": "GAS_URL 未設定"}
-        r = requests.post(self.url, json=payload, headers=self._headers(), timeout=self.timeout)
-        r.raise_for_status()
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": False, "raw": r.text}
-
-    # 下面這些 op 名稱你若跟你的 GAS 不一致，只要改這裡，不會再散落全站
-    def list_names(self, sheet: str) -> List[str]:
-        res = self.post({"op": "list", "sheet": sheet})
-        if isinstance(res, dict) and res.get("ok") and isinstance(res.get("names"), list):
-            return [str(x) for x in res["names"]]
+    def _normalize_list(self, res: dict) -> list:
+        if not isinstance(res, dict):
+            return []
+        # 常見 keys
+        for k in ("names", "list", "items", "data"):
+            v = res.get(k)
+            if isinstance(v, list):
+                # data 可能是 [{"name":"A"},...]
+                if v and isinstance(v[0], dict):
+                    for nk in ("name", "title", "key"):
+                        if nk in v[0]:
+                            return [str(x.get(nk, "")).strip() for x in v if str(x.get(nk, "")).strip()]
+                return [str(x).strip() for x in v if str(x).strip()]
         return []
 
-    def get_payload(self, sheet: str, name: str) -> Optional[dict]:
-        res = self.post({"op": "get", "sheet": sheet, "name": name})
-        if isinstance(res, dict) and res.get("ok"):
-            return res.get("payload")
+    def _normalize_payload(self, res: dict):
+        if not isinstance(res, dict):
+            return None
+        for k in ("payload", "row", "item", "data", "value"):
+            if k in res:
+                return res.get(k)
+        # 有些直接回傳 payload 本體
+        if "rows" in res:
+            return res
         return None
 
-    def upsert(self, sheet: str, name: str, payload: dict) -> Tuple[bool, str]:
-        res = self.post({"op": "upsert", "sheet": sheet, "name": name, "payload": payload})
-        ok = bool(res.get("ok")) if isinstance(res, dict) else False
-        return ok, (str(res.get("msg")) if isinstance(res, dict) else "upsert failed")
+    def _ok(self, res: dict) -> bool:
+        if not isinstance(res, dict):
+            return False
+        if res.get("ok") is True:
+            return True
+        if str(res.get("status", "")).lower() in ("ok", "success", "true"):
+            return True
+        if res.get("success") is True:
+            return True
+        return False
 
-    def create_only(self, sheet: str, name: str, payload: dict) -> Tuple[bool, str]:
-        res = self.post({"op": "create_only", "sheet": sheet, "name": name, "payload": payload})
-        ok = bool(res.get("ok")) if isinstance(res, dict) else False
-        return ok, (str(res.get("msg")) if isinstance(res, dict) else "create failed")
+    def _request(self, payload: dict) -> dict:
+        if not self.url:
+            return {"ok": False, "error": "GAS_URL 未設定"}
 
-    def delete(self, sheet: str, name: str) -> Tuple[bool, str]:
-        res = self.post({"op": "delete", "sheet": sheet, "name": name})
-        ok = bool(res.get("ok")) if isinstance(res, dict) else False
-        return ok, (str(res.get("msg")) if isinstance(res, dict) else "delete failed")
+        # 1) 先試 POST JSON（多數都可）
+        try:
+            p = dict(payload or {})
+            if self.token:
+                # 有些 GAS 只看 payload token
+                p.setdefault("token", self.token)
+            r = requests.post(self.url, json=p, headers=self._headers(), timeout=self.timeout)
+            r.raise_for_status()
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": False, "raw": r.text}
+        except Exception:
+            # 2) 再試 GET query（不少人用 doGet）
+            try:
+                q = dict(payload or {})
+                if self.token:
+                    q.setdefault("token", self.token)
+                r = requests.get(self.url, params=q, timeout=self.timeout)
+                r.raise_for_status()
+                try:
+                    return r.json()
+                except Exception:
+                    return {"ok": False, "raw": r.text}
+            except Exception as e2:
+                return {"ok": False, "error": f"{type(e2).__name__}: {e2}"}
+
+    def _call_multi(self, variants: list) -> dict:
+        last = {}
+        for p in variants:
+            res = self._request(p)
+            last = res
+            if self._ok(res):
+                return res
+        return last
+
+    def list_names(self, sheet: str) -> list:
+        variants = [
+            {"op": "list", "sheet": sheet},
+            {"action": "list", "sheet": sheet},
+            {"mode": "list", "sheet": sheet},
+            {"op": "names", "sheet": sheet},
+            {"action": "names", "sheet": sheet},
+        ]
+        res = self._call_multi(variants)
+        return self._normalize_list(res)
+
+    def get_payload(self, sheet: str, name: str):
+        variants = [
+            {"op": "get", "sheet": sheet, "name": name},
+            {"action": "get", "sheet": sheet, "name": name},
+            {"mode": "get", "sheet": sheet, "name": name},
+            {"op": "read", "sheet": sheet, "name": name},
+            {"action": "read", "sheet": sheet, "name": name},
+        ]
+        res = self._call_multi(variants)
+        if not self._ok(res):
+            return None
+        return self._normalize_payload(res)
+
+    def create_only(self, sheet: str, name: str, payload: dict):
+        variants = [
+            {"op": "create_only", "sheet": sheet, "name": name, "payload": payload},
+            {"op": "create", "sheet": sheet, "name": name, "payload": payload},
+            {"action": "create", "sheet": sheet, "name": name, "payload": payload},
+            {"mode": "create", "sheet": sheet, "name": name, "payload": payload},
+        ]
+        res = self._call_multi(variants)
+        ok = self._ok(res)
+        msg = str(res.get("msg") or res.get("message") or ("OK" if ok else res.get("error") or "create failed"))
+        return ok, msg
+
+    def delete(self, sheet: str, name: str):
+        variants = [
+            {"op": "delete", "sheet": sheet, "name": name},
+            {"action": "delete", "sheet": sheet, "name": name},
+            {"mode": "delete", "sheet": sheet, "name": name},
+            {"op": "remove", "sheet": sheet, "name": name},
+            {"action": "remove", "sheet": sheet, "name": name},
+        ]
+        res = self._call_multi(variants)
+        ok = self._ok(res)
+        msg = str(res.get("msg") or res.get("message") or ("OK" if ok else res.get("error") or "delete failed"))
+        return ok, msg
 
 GAS_URL = _get_secret("GAS_URL", "")
 GAS_TOKEN = _get_secret("GAS_TOKEN", "")
 gas = GASClient(GAS_URL, GAS_TOKEN) if GAS_URL else GASClient("")
-#------A004：GASClient（安全版，沒設定也不炸）(結束)：------
+#------A004：GASClient（自動相容版：POST/GET、多種欄位名）(結束)：------
 
 
-#------A005：GAS cache（避免切換一直打 API，也避免切換時炸）(開始)：------
+#------A005：GAS cache（避免切換一直打 API）(開始)：------
 def _gas_cache_key(prefix: str, sheet: str, name: str = "") -> str:
     return f"_gas_cache::{prefix}::{sheet}::{name}"
 
-def _cache_gas_list(sheet: str) -> List[str]:
+def _cache_gas_list(sheet: str) -> list:
     k = _gas_cache_key("list", sheet)
     if k in st.session_state:
         return st.session_state[k]
@@ -230,7 +328,7 @@ def _cache_gas_list(sheet: str) -> List[str]:
     st.session_state[k] = names
     return names
 
-def _cache_gas_get(sheet: str, name: str) -> Optional[dict]:
+def _cache_gas_get(sheet: str, name: str):
     k = _gas_cache_key("get", sheet, name)
     if k in st.session_state:
         return st.session_state[k]
@@ -242,7 +340,7 @@ def _gas_cache_clear():
     keys = [k for k in st.session_state.keys() if str(k).startswith("_gas_cache::")]
     for k in keys:
         st.session_state.pop(k, None)
-#------A005：GAS cache（避免切換一直打 API，也避免切換時炸）(結束)：------
+#------A005：GAS cache（避免切換一直打 API）(結束)：------
 
 
 #------A006：外箱資料清理/防呆(開始)：------
