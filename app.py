@@ -83,122 +83,136 @@ def _loading_watchdog(timeout_sec: int = 60):
 
 
 
-#------A004：共用工具/Action/Overlay（必裝）(開始)：------
+#------A004：GAS / Secrets / 模板快取工具（補齊 _cache_gas_list 等缺漏）(開始)：------
 import time
-import uuid
+import json
+import requests
 import streamlit as st
 
-def _get_render_nonce() -> str:
-    # 用於產生唯一 key（避免 DuplicateElementId）
-    if "_render_nonce" not in st.session_state:
-        st.session_state["_render_nonce"] = uuid.uuid4().hex[:10]
-    return st.session_state["_render_nonce"]
-
-def _bump_render_nonce():
-    st.session_state["_render_nonce"] = uuid.uuid4().hex[:10]
-
-def _trigger(action: str, message: str = "處理中..."):
-    # ✅ 第一段：立刻寫入狀態 + 立刻 rerun，讓遮罩「馬上出現」
-    st.session_state["_pending_action"] = action
-    st.session_state["_pending_payload"] = {"message": message, "ts": time.time()}
-    st.session_state["_loading"] = True
-    st.session_state["_loading_msg"] = message
-    st.session_state["_loading_started"] = time.time()
-    st.session_state["_loading_nonce"] = uuid.uuid4().hex[:8]
-    st.rerun()
-
-def _has_action() -> bool:
-    return bool(st.session_state.get("_pending_action"))
-
-def _handle_action(action_map: dict):
-    # ✅ 第二段：在 rerun 後真正執行耗時工作（並且確保結束才解除遮罩）
-    if not _has_action():
-        return
-
-    action = st.session_state.get("_pending_action")
-    payload = st.session_state.get("_pending_payload") or {}
-    fn = action_map.get(action)
-
+def _get_secret_any(*keys: str, default=None):
+    """
+    不改你的 Secrets，只用「多 key 兼容讀取」：
+    例如同時支援 GAS_URL / gas_url / GAS_ENDPOINT...
+    """
     try:
-        if fn is None:
-            raise RuntimeError(f"找不到 action handler：{action}")
-        fn(payload)  # 真的做事
-    finally:
-        # ✅ 不管成功失敗，都要清 action，避免一直重跑
-        st.session_state["_pending_action"] = None
-        st.session_state["_pending_payload"] = None
-        st.session_state["_loading"] = False
-        st.session_state["_loading_msg"] = ""
-        st.session_state["_loading_started"] = None
-        # ✅ 結束後 bump nonce，避免 plotly/元件 key 撞到
-        _bump_render_nonce()
+        sec = st.secrets
+    except Exception:
+        sec = {}
+    for k in keys:
+        try:
+            if k in sec and sec[k] not in (None, ""):
+                return sec[k]
+        except Exception:
+            pass
+    return default
 
-def _render_fullpage_overlay():
-    if not st.session_state.get("_loading"):
-        return
+class GASClient:
+    def __init__(self, gas_url: str, gas_token: str | None = None, timeout: int = 30):
+        self.gas_url = gas_url
+        self.gas_token = gas_token
+        self.timeout = timeout
 
-    msg = st.session_state.get("_loading_msg") or "處理中..."
-    nonce = st.session_state.get("_loading_nonce") or "x"
+    def _post(self, payload: dict):
+        if not self.gas_url:
+            raise RuntimeError("GAS_URL 未設定（Secrets 讀不到）。")
+        headers = {"Content-Type": "application/json"}
+        if self.gas_token:
+            headers["X-Token"] = self.gas_token
+        r = requests.post(self.gas_url, data=json.dumps(payload), headers=headers, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json() if r.text else {}
 
-    st.markdown(
-        f"""
-        <style>
-        .yimimi-overlay {{
-            position: fixed;
-            inset: 0;
-            z-index: 999999;
-            background: rgba(255,255,255,0.75);
-            backdrop-filter: blur(2px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
-        .yimimi-card {{
-            background: white;
-            border: 1px solid rgba(0,0,0,0.08);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.10);
-            border-radius: 14px;
-            padding: 18px 20px;
-            min-width: 280px;
-            max-width: 520px;
-            text-align: center;
-        }}
-        .yimimi-spinner {{
-            width: 26px; height: 26px;
-            border: 3px solid rgba(0,0,0,0.12);
-            border-top-color: rgba(0,0,0,0.55);
-            border-radius: 50%;
-            margin: 0 auto 10px auto;
-            animation: spin 0.9s linear infinite;
-        }}
-        @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-        </style>
-        <div class="yimimi-overlay" id="yimimi_overlay_{nonce}">
-          <div class="yimimi-card">
-            <div class="yimimi-spinner"></div>
-            <div style="font-weight:700; font-size:16px;">讀取中...</div>
-            <div style="margin-top:6px; font-size:13px; opacity:.8;">{msg}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    def list_templates(self, sheet: str):
+        return self._post({"op": "list", "sheet": sheet})
 
-def _loading_watchdog(timeout_sec: int = 60):
-    # ✅ 避免因例外造成遮罩永遠不消失
-    if not st.session_state.get("_loading"):
-        return
-    started = st.session_state.get("_loading_started")
-    if not started:
-        return
-    if time.time() - float(started) > timeout_sec:
-        st.session_state["_loading"] = False
-        st.session_state["_pending_action"] = None
-        st.session_state["_pending_payload"] = None
-        st.session_state["_loading_msg"] = ""
-        st.session_state["_loading_started"] = None
-        _bump_render_nonce()
-#------A004：共用工具/Action/Overlay（必裝）(結束)：------
+    def read_template(self, sheet: str, name: str):
+        return self._post({"op": "read", "sheet": sheet, "name": name})
+
+    def write_template(self, sheet: str, name: str, data: dict):
+        return self._post({"op": "write", "sheet": sheet, "name": name, "data": data})
+
+    def delete_template(self, sheet: str, name: str):
+        return self._post({"op": "delete", "sheet": sheet, "name": name})
+
+def _get_gas_client() -> GASClient | None:
+    """
+    用 session_state 快取 client，避免每次 rerun 都重建、也避免「程式載入順序」造成 NameError。
+    """
+    if "gas_client" in st.session_state and st.session_state["gas_client"] is not None:
+        return st.session_state["gas_client"]
+
+    gas_url = _get_secret_any("GAS_URL", "gas_url", "GAS_ENDPOINT", "gas_endpoint", default=None)
+    gas_token = _get_secret_any("GAS_TOKEN", "gas_token", "GAS_KEY", "gas_key", default=None)
+
+    if not gas_url:
+        st.session_state["gas_client"] = None
+        return None
+
+    st.session_state["gas_client"] = GASClient(gas_url, gas_token)
+    return st.session_state["gas_client"]
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cache_gas_list(sheet: str) -> list[str]:
+    """
+    ✅ 你缺的函式：template_block 會用到它
+    回傳模板名稱 list[str]
+    """
+    gas = _get_gas_client()
+    if not gas:
+        return []
+    try:
+        res = gas.list_templates(sheet)
+        names = res.get("names") or res.get("data") or res.get("items") or []
+        # 強制轉字串、去空
+        out = []
+        for x in names:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return sorted(set(out))
+    except Exception:
+        return []
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _cache_gas_read(sheet: str, name: str) -> dict:
+    gas = _get_gas_client()
+    if not gas:
+        return {}
+    try:
+        res = gas.read_template(sheet, name)
+        data = res.get("data") if isinstance(res, dict) else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def _gas_write(sheet: str, name: str, data: dict) -> tuple[bool, str]:
+    gas = _get_gas_client()
+    if not gas:
+        return False, "GAS_URL 未設定，無法儲存模板。"
+    try:
+        gas.write_template(sheet, name, data)
+        # ✅ 讓 list/read 快取失效，避免你說的「畫面恢復了但資料還沒更新」假更新
+        _cache_gas_list.clear()
+        _cache_gas_read.clear()
+        return True, "已儲存模板。"
+    except Exception as e:
+        return False, f"儲存失敗：{e}"
+
+def _gas_delete(sheet: str, name: str) -> tuple[bool, str]:
+    gas = _get_gas_client()
+    if not gas:
+        return False, "GAS_URL 未設定，無法刪除模板。"
+    try:
+        gas.delete_template(sheet, name)
+        _cache_gas_list.clear()
+        _cache_gas_read.clear()
+        return True, "已刪除模板。"
+    except Exception as e:
+        return False, f"刪除失敗：{e}"
+#------A004：GAS / Secrets / 模板快取工具（補齊 _cache_gas_list 等缺漏）(結束)：------
+
 
 
 #------A005：全頁讀取遮罩防呆（立刻顯示 + 禁止操作）(開始)：------
@@ -886,45 +900,96 @@ def prod_table_block():
 
 
 
-#------A013：外箱選擇/商品展開為 Item(開始)：------
-def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
-    bins=[]
-    for _,r in df_box.iterrows():
-        if not bool(r.get('選取', False)):
-            continue
-        qty=int(r.get('數量',0) or 0)
-        if qty<=0:
-            continue
-        L=float(r.get('長',0) or 0)
-        W=float(r.get('寬',0) or 0)
-        H=float(r.get('高',0) or 0)
-        if L<=0 or W<=0 or H<=0:
-            continue
-        name=(str(r.get('名稱','') or '').strip() or '外箱')
-        tare=float(r.get('空箱重量',0) or 0)
-        for i in range(qty):
-            bins.append({'name':name,'l':L,'w':W,'h':H,'tare':tare})
-    return bins
+#------A013：模板區塊 template_block（修正 NameError/恢復模板讀取/真更新）(開始)：------
+import streamlit as st
 
-def _build_items(df_prod:pd.DataFrame)->List[Item]:
-    items=[]
-    for _,r in df_prod.iterrows():
-        if not bool(r.get('選取', False)):
-            continue
-        qty=int(r.get('數量',0) or 0)
-        if qty<=0:
-            continue
-        L=float(r.get('長',0) or 0)
-        W=float(r.get('寬',0) or 0)
-        H=float(r.get('高',0) or 0)
-        if L<=0 or W<=0 or H<=0:
-            continue
-        nm=(str(r.get('商品名稱','') or '').strip() or '商品')
-        wt=float(r.get('重量(kg)',0) or 0)
-        for i in range(qty):
-            items.append(Item(f"{nm}_{i+1}", L, W, H, wt))
-    return items
-#------A013：外箱選擇/商品展開為 Item(結束)：------
+def template_block(title: str, sheet: str, active_key: str, df_key: str,
+                   build_payload_fn, apply_payload_fn, tpl_key_prefix: str):
+    """
+    你原本 main() 裡呼叫的 template_block(...) 用這版取代。
+    - build_payload_fn(): 由目前資料組成要存的 payload(dict)
+    - apply_payload_fn(payload): 把讀到的 payload 套用回 session_state / df
+    """
+
+    st.markdown(f"### {title}")
+
+    gas = _get_gas_client()
+    if not gas:
+        st.warning("⚠ 模板功能未啟用：讀不到 GAS_URL（Secrets 仍維持你原本的 key，不會被我改）。")
+        return
+
+    colL, colR = st.columns(2)
+
+    # 左：選擇模板 + 載入
+    with colL:
+        names = ["(無)"] + _cache_gas_list(sheet)
+        cur = st.session_state.get(active_key, "(無)")
+        if cur not in names:
+            cur = "(無)"
+
+        sel = st.selectbox(
+            "選擇模板",
+            options=names,
+            index=names.index(cur) if cur in names else 0,
+            key=f"{tpl_key_prefix}_sel",
+        )
+
+        if st.button("⬇️ 載入模板", use_container_width=True, key=f"{tpl_key_prefix}_btn_load"):
+            if sel == "(無)":
+                st.info("請先選擇要載入的模板。")
+            else:
+                payload = _cache_gas_read(sheet, sel)
+                if not payload:
+                    st.error("讀取失敗或模板內容為空。")
+                else:
+                    try:
+                        apply_payload_fn(payload)
+                        st.session_state[active_key] = sel
+                        st.success(f"已載入：{sel}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"套用模板失敗：{e}")
+
+    # 右：刪除模板
+    with colR:
+        del_names = ["(無)"] + _cache_gas_list(sheet)
+        del_sel = st.selectbox(
+            "要刪除的模板",
+            options=del_names,
+            key=f"{tpl_key_prefix}_del_sel",
+        )
+        if st.button("🗑️ 刪除模板", use_container_width=True, key=f"{tpl_key_prefix}_btn_del"):
+            if del_sel == "(無)":
+                st.info("請先選擇要刪除的模板。")
+            else:
+                ok, msg = _gas_delete(sheet, del_sel)
+                if ok:
+                    if st.session_state.get(active_key) == del_sel:
+                        st.session_state[active_key] = "(無)"
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+    # 另存新模板名稱 + 儲存
+    save_name = st.text_input("另存為模板名稱", key=f"{tpl_key_prefix}_save_name", placeholder="例如：常用A")
+    if st.button("💾 儲存模板", use_container_width=True, key=f"{tpl_key_prefix}_btn_save"):
+        name = (save_name or "").strip()
+        if not name:
+            st.info("請輸入要儲存的模板名稱。")
+        else:
+            try:
+                payload = build_payload_fn()
+                ok, msg = _gas_write(sheet, name, payload)
+                if ok:
+                    st.session_state[active_key] = name
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+            except Exception as e:
+                st.error(f"組合資料失敗：{e}")
+#------A013：模板區塊 template_block（修正 NameError/恢復模板讀取/真更新）(結束)：------
 
 
 
