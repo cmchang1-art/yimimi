@@ -279,63 +279,93 @@ def _end_loading():
 
 
 
-#------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(開始)：------
-import json
-import urllib.request
-import urllib.parse
-
-# ✅ 不改你原本 secrets 的 key，只做「安全讀取」
-def _secret_get(key: str, default=""):
+#------A006：Google Apps Script(GAS) API Client(開始)：------
+def _get_secret(key: str, default: str = "") -> str:
+    """
+    ✅注意：不改你的 secrets key 名稱
+    只讀取 st.secrets[key]，沒有就回傳 default
+    """
     try:
-        return st.secrets.get(key, default)
+        v = st.secrets.get(key, default)
+        return (v or default) if isinstance(v, str) else default
     except Exception:
         return default
 
-# ✅ 這兩個一定要「永遠存在」，否則 template_block 會 NameError
-GAS_URL = _secret_get("GAS_URL", "")
-GAS_TOKEN = _secret_get("GAS_TOKEN", "")
+# ✅不改 key：就是 GAS_URL / GAS_TOKEN
+GAS_URL   = _get_secret("GAS_URL", "").strip()
+GAS_TOKEN = _get_secret("GAS_TOKEN", "").strip()
 
 class GASClient:
+    """
+    ✅這份是「完整可用版」
+    會提供 template_block 需要的：
+      - list_names(sheet)
+      - get_payload(sheet, name)
+      - create_only(sheet, name, payload)
+      - upsert(sheet, name, payload)
+      - delete(sheet, name)
+    """
     def __init__(self, url: str, token: str):
         self.url = (url or "").strip()
         self.token = (token or "").strip()
 
-    def ok(self) -> bool:
-        return bool(self.url) and bool(self.token)
+    @property
+    def ready(self) -> bool:
+        return bool(self.url and self.token)
 
-    def _post(self, payload: dict, timeout: int = 30):
-        if not self.ok():
-            raise RuntimeError("尚未設定 GAS_URL / GAS_TOKEN（Secrets）或設定為空，無法讀取模板。")
+    def _call(self, action: str, sheet: str, name: str = "", payload=None) -> dict:
+        if not self.ready:
+            return {"ok": False, "error": "missing_gas_config"}
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self.url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-Token": self.token,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
+        params = {"action": action, "sheet": sheet, "token": self.token}
+        if name:
+            params["name"] = name
+
+        try:
+            if action == "upsert":
+                r = requests.post(
+                    self.url,
+                    params=params,
+                    json={"payload_json": json.dumps(payload or {}, ensure_ascii=False)},
+                    timeout=30,
+                )
+            else:
+                r = requests.get(self.url, params=params, timeout=30)
+
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def list_names(self, sheet: str):
+        d = self._call("list", sheet)
+        return list(d.get("items") or []) if d.get("ok") else []
+
+    def get_payload(self, sheet: str, name: str):
+        d = self._call("get", sheet, name=name)
+        if not d.get("ok"):
+            return None
+        raw = d.get("payload_json") or ""
+        try:
             return json.loads(raw) if raw else {}
+        except Exception:
+            return None
 
-    def list_templates(self, sheet: str):
-        return self._post({"op": "list", "sheet": sheet})
+    def create_only(self, sheet: str, name: str, payload: dict):
+        if name in self.list_names(sheet):
+            return False, "同名模板已存在，請改名後再儲存。"
+        d = self._call("upsert", sheet, name=name, payload=payload)
+        return (True, "已儲存") if d.get("ok") else (False, f"儲存失敗：{d.get('error','未知錯誤')}")
 
-    def load_template(self, sheet: str, name: str):
-        return self._post({"op": "load", "sheet": sheet, "name": name})
+    def upsert(self, sheet: str, name: str, payload: dict):
+        d = self._call("upsert", sheet, name=name, payload=payload)
+        return (True, "已更新") if d.get("ok") else (False, f"更新失敗：{d.get('error','未知錯誤')}")
 
-    def save_template(self, sheet: str, name: str, data: dict):
-        return self._post({"op": "save", "sheet": sheet, "name": name, "data": data})
+    def delete(self, sheet: str, name: str):
+        d = self._call("delete", sheet, name=name)
+        return (True, "已刪除") if d.get("ok") else (False, f"刪除失敗：{d.get('error','未知錯誤')}")
 
-    def delete_template(self, sheet: str, name: str):
-        return self._post({"op": "delete", "sheet": sheet, "name": name})
-
-# ✅ 也要確保 gas 物件永遠可用（但不會因 secrets 空值就直接讓整個 app 全白）
 gas = GASClient(GAS_URL, GAS_TOKEN)
-#------A006：GASClient（Google Apps Script API 客戶端/避免 NameError）(結束)：------
+#------A006：Google Apps Script(GAS) API Client(結束)：------
 
 
 #------A006b：GAS 快取輔助（list/get/save/delete + clear cache）(開始)：------
@@ -395,69 +425,58 @@ def _gas_cache_clear():
 #------A006b：GAS 快取輔助（list/get/save/delete + clear cache）(結束)：------
 
 
-#------A007：外箱資料清理/防呆(開始)：------
-import pandas as pd
-import numpy as np
-
-def _to_float(x, default=0.0):
+#------A007：資料清理與防呆（避免 NameError / 非數字崩潰）(開始)：------
+def _to_float(x, default=0.0) -> float:
     try:
         if x is None:
             return float(default)
-        if isinstance(x, (int, float, np.number)):
+        if isinstance(x, (int, float)):
             return float(x)
         s = str(x).strip()
-        if s == "" or s.lower() in ("nan", "none", "null"):
+        if s == "":
             return float(default)
-        # 允許「1,234.5」
-        s = s.replace(",", "")
         return float(s)
     except Exception:
         return float(default)
 
-def _sanitize_box(df: "pd.DataFrame") -> "pd.DataFrame":
-    if df is None:
-        return pd.DataFrame(columns=["名稱","長","寬","高","數量","空箱重量"])
+def _to_int(x, default=0) -> int:
+    try:
+        if x is None:
+            return int(default)
+        if isinstance(x, int):
+            return int(x)
+        if isinstance(x, float):
+            return int(x)
+        s = str(x).strip()
+        if s == "":
+            return int(default)
+        return int(float(s))
+    except Exception:
+        return int(default)
 
+def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-
-    # ✅ 兼容不同欄名（如果你原本不是中文欄名也能撐住）
-    rename_map = {}
-    for c in df.columns:
-        cc = str(c).strip()
-        if cc in ("name", "箱名"):
-            rename_map[c] = "名稱"
-        elif cc in ("L", "length", "長度"):
-            rename_map[c] = "長"
-        elif cc in ("W", "width", "寬度"):
-            rename_map[c] = "寬"
-        elif cc in ("H", "height", "高度"):
-            rename_map[c] = "高"
-        elif cc in ("qty", "count"):
-            rename_map[c] = "數量"
-        elif cc in ("tare", "empty_weight"):
-            rename_map[c] = "空箱重量"
-    if rename_map:
-        df = df.rename(columns=rename_map)
-
-    # ✅ 確保必備欄位存在
-    for col in ["名稱","長","寬","高","數量","空箱重量"]:
-        if col not in df.columns:
-            df[col] = "" if col == "名稱" else 0
-
-    # ✅ 型別清理
-    for col in ["長","寬","高","數量","空箱重量"]:
-        df[col] = df[col].apply(_to_float)
-
-    # ✅ 數量至少 0、長寬高至少 0
-    df["數量"] = df["數量"].apply(lambda v: max(0, int(round(v))))
-    for col in ["長","寬","高","空箱重量"]:
-        df[col] = df[col].apply(lambda v: max(0.0, float(v)))
-
-    # ✅ 名稱清理
-    df["名稱"] = df["名稱"].astype(str).fillna("").apply(lambda s: s.strip())
-
+    # 這些欄位都保證轉成數字，不會因為空白/字串爆掉
+    for c in ["長", "寬", "高", "空箱重量"]:
+        if c in df.columns:
+            df[c] = df[c].apply(_to_float)
+    if "數量" in df.columns:
+        df["數量"] = df["數量"].apply(_to_int)
+    if "選取" in df.columns:
+        df["選取"] = df["選取"].fillna(False).astype(bool)
     return df
-#------A007：外箱資料清理/防呆(結束)：------
+
+def _sanitize_prod(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for c in ["長", "寬", "高", "重量(kg)"]:
+        if c in df.columns:
+            df[c] = df[c].apply(_to_float)
+    if "數量" in df.columns:
+        df["數量"] = df["數量"].apply(_to_int)
+    if "選取" in df.columns:
+        df["選取"] = df["選取"].fillna(False).astype(bool)
+    return df
+#------A007：資料清理與防呆（避免 NameError / 非數字崩潰）(結束)：------
 
 
 
