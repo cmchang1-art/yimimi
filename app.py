@@ -778,37 +778,52 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item], color_map:Dict[str,str]=N
             hoverinfo='skip', showlegend=False
         ))
 
-    # 物件方塊
+    def _base_name(n:str)->str:
+        n=str(n or '')
+        return n.rsplit('_',1)[0] if '_' in n else n
+
+    def _rot_dim(it:Item):
+        # ✅ py3dbp 旋轉後尺寸（避免你看到融合/穿透/大小不對）
+        if hasattr(it,'get_dimension'):
+            d=it.get_dimension()  # (w,h,d)
+            return float(d[0]),float(d[1]),float(d[2])
+        return float(it.width),float(it.height),float(it.depth)
+
+    # 若未提供 color_map，就用 fitted 自己建立（但你現在會由 A016 提供，才能跨箱一致）
+    if color_map is None:
+        palette=['#2F3A4A','#4C6A92','#6C757D','#8E9AAF','#A3B18A','#B08968','#C9ADA7','#6D6875']
+        color_map={}
+        ci=0
+        for it in fitted:
+            base=_base_name(getattr(it,'name',''))
+            if base not in color_map:
+                color_map[base]=palette[ci%len(palette)]
+                ci += 1
+
+    # 畫商品：實心、不透明、加邊框
     for it in fitted:
-        base_name=str(it.name).split('_')[0]
-        c=(color_map or {}).get(base_name, '#4E79A7')
+        name=str(getattr(it,'name',''))
+        base=_base_name(name)
+        c=color_map.get(base, '#4C6A92')
 
-        px=float(it.position[0]); py=float(it.position[1]); pz=float(it.position[2])
-        dx=float(it.width); dy=float(it.height); dz=float(it.depth)  # 注意：你前面統一座標後的對應
+        px,py,pz=[float(v) for v in (getattr(it,'position',[0,0,0]) or [0,0,0])]
+        dx,dy,dz=_rot_dim(it)
 
-        # 立方體 8 個頂點
-        vx=[px, px+dx, px+dx, px,   px, px+dx, px+dx, px]
-        vy=[py, py,   py+dy, py+dy, py, py,   py+dy, py+dy]
-        vz=[pz, pz,   pz,    pz,    pz+dz, pz+dz, pz+dz, pz+dz]
+        vx=[px,px+dx,px+dx,px,px,px+dx,px+dx,px]
+        vy=[py,py,py+dy,py+dy,py,py,py+dy,py+dy]
+        vz=[pz,pz,pz,pz,pz+dz,pz+dz,pz+dz,pz+dz]
 
-        # 面
-        faces=[(0,1,2),(0,2,3),(4,5,6),(4,6,7),(0,1,5),(0,5,4),(2,3,7),(2,7,6),(1,2,6),(1,6,5),(0,3,7),(0,7,4)]
-        i=[]; j=[]; k=[]
-        for a,b,c0 in faces:
-            i.append(a); j.append(b); k.append(c0)
+        faces=[(0,1,2),(0,2,3),(4,5,6),(4,6,7),(0,1,5),(0,5,4),
+               (1,2,6),(1,6,5),(2,3,7),(2,7,6),(3,0,4),(3,4,7)]
+        I,J,K=zip(*faces)
 
         fig.add_trace(go.Mesh3d(
-            x=vx, y=vy, z=vz,
-            i=i, j=j, k=k,
-            opacity=0.78,
-            color=c,
-            flatshading=True,
-            hovertext=it.name,
-            hoverinfo='text',
+            x=vx,y=vy,z=vz, i=I,j=J,k=K,
+            color=c, opacity=1.0, flatshading=True,
+            hovertemplate=f"{base}<br>尺寸:{dx:.1f}×{dy:.1f}×{dz:.1f}<extra></extra>",
             showlegend=False
         ))
 
-        # 外框線
         item_edges=[(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
         for a,b in item_edges:
             fig.add_trace(go.Scatter3d(
@@ -822,16 +837,10 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item], color_map:Dict[str,str]=N
             xaxis=dict(range=[0,L], title='長 (L)'),
             yaxis=dict(range=[0,W], title='寬 (W)'),
             zaxis=dict(range=[0,H], title='高 (H)'),
-            aspectmode='data',
-
-            # ✅ (1) 讓初始 3D 物件看起來小約 20%：相機拉遠（eye 變大）
-            # 你之後想更小/更大，就調整下面三個數字
-            camera=dict(eye=dict(x=1.56, y=1.56, z=1.17))
+            aspectmode='data'
         ),
         margin=dict(l=0,r=0,t=0,b=0),
-
-        # ✅ (2) 讓顯示框高度更高，避免畫面被下方切到
-        height=650
+        height=520
     )
     return fig
 #------A014：3D 圖表建立（Plotly）(結束)：------
