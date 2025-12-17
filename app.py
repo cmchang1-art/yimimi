@@ -837,10 +837,14 @@ def build_3d_fig(box:Dict[str,Any], fitted:List[Item], color_map:Dict[str,str]=N
             xaxis=dict(range=[0,L], title='長 (L)'),
             yaxis=dict(range=[0,W], title='寬 (W)'),
             zaxis=dict(range=[0,H], title='高 (H)'),
-            aspectmode='data'
+            aspectmode='data',
+          
+            # ✅ (1) 讓初始 3D 物件看起來小約 20%：相機拉遠（eye 變大）
+            # 你之後想更小/更大，就調整下面三個數字
+            camera=dict(eye=dict(x=1.56, y=1.56, z=1.17))
         ),
         margin=dict(l=0,r=0,t=0,b=0),
-        height=520
+        height=650
     )
     return fig
 #------A014：3D 圖表建立（Plotly）(結束)：------
