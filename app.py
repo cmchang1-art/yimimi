@@ -1175,7 +1175,7 @@ def result_block():
     tab_titles = [f"{p['name']}（裝入 {len(p.get('items') or [])} 件）" for p in packed_bins]
     tabs = st.tabs(tab_titles)
 
-    for t, p in zip(tabs, packed_bins):
+    for idx, (t, p) in enumerate(zip(tabs, packed_bins), start=1):
         with t:
             box_meta = p['box']
             fitted = list(p.get('items') or [])
@@ -1189,7 +1189,8 @@ def result_block():
                 )
             with c2:
                 fig = build_3d_fig(box_meta, fitted, color_map=color_map)
-                st.plotly_chart(fig, use_container_width=True)
+                # ✅ 關鍵修正：多箱(tab)時，每個 plotly_chart 必須有唯一 key，避免 DuplicateElementId
+                st.plotly_chart(fig, use_container_width=True, key=f"box3d_{idx}")
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
