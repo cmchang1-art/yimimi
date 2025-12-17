@@ -1,128 +1,7 @@
 # -*- coding: utf-8 -*-
-#------A000：常數 + 基礎工具（必須放在 A001 之前）(開始)：------
-from __future__ import annotations
-
-import re
-import time
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Tuple, Optional
-
-import pandas as pd
-import streamlit as st
-from py3dbp import Item
-
-# ✅ 你 main() 會用到的 sheet 名稱（這兩個一定要存在）
-SHEET_BOX  = "BOX_TPL"
-SHEET_PROD = "PROD_TPL"
-
-def _now_tw() -> datetime:
-    return datetime.now(ZoneInfo("Asia/Taipei"))
-
-def _safe_name(s: str) -> str:
-    s = str(s or "")
-    s = re.sub(r'[\\/:*?"<>|]+', "_", s)  # windows 不合法字元
-    s = re.sub(r"\s+", " ", s).strip()
-    return s or "未命名"
-
-def _to_float(v: Any, default: float = 0.0) -> float:
-    try:
-        if v is None:
-            return float(default)
-        if isinstance(v, (int, float)):
-            return float(v)
-        s = str(v).strip()
-        if s == "":
-            return float(default)
-        return float(s)
-    except Exception:
-        return float(default)
-
-def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"])
-    df = df.copy()
-    # 欄位補齊
-    for c in ["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]:
-        if c not in df.columns:
-            df[c] = "" if c == "名稱" else 0
-    # 型別整理
-    df["選取"] = df["選取"].astype(bool)
-    df["名稱"] = df["名稱"].astype(str)
-    for c in ["長", "寬", "高", "空箱重量"]:
-        df[c] = df[c].apply(lambda x: _to_float(x, 0.0))
-    df["數量"] = df["數量"].apply(lambda x: int(_to_float(x, 0)))
-    return df[["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]]
-
-def _sanitize_prod(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"])
-    df = df.copy()
-    for c in ["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"]:
-        if c not in df.columns:
-            df[c] = "" if c == "商品名稱" else 0
-    df["選取"] = df["選取"].astype(bool)
-    df["商品名稱"] = df["商品名稱"].astype(str)
-    for c in ["長", "寬", "高", "重量(kg)"]:
-        df[c] = df[c].apply(lambda x: _to_float(x, 0.0))
-    df["數量"] = df["數量"].apply(lambda x: int(_to_float(x, 0)))
-    return df[["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"]]
-
-def _build_bins(df_box: pd.DataFrame) -> List[Dict[str, Any]]:
-    df_box = _sanitize_box(df_box)
-    bins: List[Dict[str, Any]] = []
-    for _, r in df_box.iterrows():
-        if not bool(r["選取"]):
-            continue
-        qty = int(r["數量"])
-        L, W, H = float(r["長"]), float(r["寬"]), float(r["高"])
-        if qty <= 0 or L <= 0 or W <= 0 or H <= 0:
-            continue
-        name = str(r["名稱"]).strip() or "外箱"
-        tare = float(r["空箱重量"])
-        for _i in range(qty):
-            bins.append({"name": name, "l": L, "w": W, "h": H, "tare": tare})
-    return bins
-
-def _build_items(df_prod: pd.DataFrame) -> List[Item]:
-    df_prod = _sanitize_prod(df_prod)
-    items: List[Item] = []
-    for _, r in df_prod.iterrows():
-        if not bool(r["選取"]):
-            continue
-        qty = int(r["數量"])
-        L, W, H = float(r["長"]), float(r["寬"]), float(r["高"])
-        wt = float(r["重量(kg)"])
-        if qty <= 0 or L <= 0 or W <= 0 or H <= 0:
-            continue
-        base = str(r["商品名稱"]).strip() or "商品"
-        for i in range(qty):
-            items.append(Item(f"{base}_{i+1}", L, W, H, wt))
-    return items
-
-def _loading_overlay_html() -> str:
-    # 給 A011/A012 用（避免 NameError）
-    return """
-    <div style="
-      position:absolute; inset:0;
-      background:rgba(255,255,255,0.75);
-      z-index:9999;
-      border-radius:12px;
-    "></div>
-    """
-
-def _force_rerun():
-    # 給 A011/A012 用（避免 NameError）
-    st.rerun()
-#------A000：常數 + 基礎工具（必須放在 A001 之前）(結束)：------
-
-
 #------A001：匯入套件(開始)：------
 import os, json, re
-import time
-import html
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional, Tuple
 
 import requests
@@ -134,7 +13,6 @@ from plotly.offline import plot as plotly_offline_plot
 #------A001：匯入套件(結束)：------
 
 
-
 #------A002：Streamlit頁面設定與全域CSS(開始)：------
 st.set_page_config(page_title='3D裝箱系統', layout='wide')
 st.markdown('''<style>
@@ -143,472 +21,319 @@ st.markdown('''<style>
 .soft-card{border:1px solid #e6e6e6;border-radius:14px;padding:16px;background:#fff}
 .soft-title{font-weight:800;font-size:20px;margin-bottom:10px}
 
-/* ===== Full-page loading overlay (真防呆/鎖全頁) ===== */
-.fullpage-overlay{
-  position:fixed; inset:0;
+/* ===== Loading overlay (鎖操作) ===== */
+.loading-wrap{position:relative}
+.loading-overlay{
+  position:absolute; inset:0;
   background:rgba(255,255,255,0.78);
-  display:flex; align-items:center; justify-content:center;
-  z-index:99999;
-  pointer-events:all;   /* ✅ 直接攔截全頁點擊 */
-}
-.fullpage-box{
-  background:#fff;
-  border:1px solid rgba(0,0,0,0.18);
+  border:1px dashed rgba(0,0,0,0.18);
   border-radius:14px;
-  padding:12px 16px;
-  box-shadow:0 10px 26px rgba(0,0,0,0.10);
-  font-weight:900;
+  display:flex; align-items:center; justify-content:center;
+  z-index:50;
+  pointer-events:all;
 }
-.fullpage-sub{font-weight:500;color:#555;font-size:13px;margin-top:6px;text-align:center}
+.loading-box{
+  background:#fff;
+  border:1px solid rgba(0,0,0,0.15);
+  border-radius:12px;
+  padding:10px 14px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.08);
+  font-weight:800;
+}
+.loading-sub{font-weight:500;color:#555;font-size:13px;margin-top:4px}
 </style>''', unsafe_allow_html=True)
 #------A002：Streamlit頁面設定與全域CSS(結束)：------
 
 
 
-#------A003：Loading Watchdog（避免 loading 卡死）(開始)：------
-import time
-import streamlit as st
-
-def _loading_watchdog(timeout_sec: int = 60):
-    """
-    防止 busy/遮罩卡死：
-    - 如果 session_state['_busy'] 長時間為 True，代表上一輪可能中斷/例外沒清掉
-    - 超過 timeout_sec 就自動解除 busy 並清掉 pending action
-    """
-    now = time.monotonic()
-
-    # 初始化 timestamp
-    if "_busy_since" not in st.session_state:
-        st.session_state["_busy_since"] = None
-
-    # 若正在 busy，記錄開始時間
-    if st.session_state.get("_busy"):
-        if st.session_state["_busy_since"] is None:
-            st.session_state["_busy_since"] = now
-
-        # 超時就強制解除（避免全站一直不能操作）
-        if (now - st.session_state["_busy_since"]) > timeout_sec:
-            st.session_state["_busy"] = False
-            st.session_state["_busy_since"] = None
-            st.session_state["_pending_action"] = None
-            st.session_state["_pending_payload"] = {}
-            st.session_state["_pending_message"] = ""
-            # 這裡不要 st.rerun()，避免在 main 一開始就無限 rerun
-    else:
-        # 不 busy 就清掉 timestamp
-        st.session_state["_busy_since"] = None
-#------A003：Loading Watchdog（避免 loading 卡死）(結束)：------
-
-
-
-#------A004：GAS / Secrets / 模板快取工具（補齊 _cache_gas_list 等缺漏）(開始)：------
-import json
-import requests
-import streamlit as st
-
-def _get_secret(key: str, default: str = "") -> str:
-    """
-    ✅不改你的 Secrets key 名稱：只讀 GAS_URL / GAS_TOKEN
-    """
+#------A003：Secrets/環境變數讀取工具(開始)：------
+def _secret(k:str, d:str='')->str:
     try:
-        v = st.secrets.get(key, default)
-        return (v or default) if isinstance(v, str) else default
+        return str(st.secrets.get(k, d))
     except Exception:
-        return default
+        return os.getenv(k, d) or d
 
-# ✅不改 key：就是 GAS_URL / GAS_TOKEN
-GAS_URL   = _get_secret("GAS_URL", "").strip()
-GAS_TOKEN = _get_secret("GAS_TOKEN", "").strip()
-#------A004：GAS / Secrets / 模板快取工具（補齊 _cache_gas_list 等缺漏）(結束)：------
+GAS_URL=_secret('GAS_URL','').strip()
+GAS_TOKEN=_secret('GAS_TOKEN','').strip()
+SHEET_BOX=_secret('SHEET_BOX','box_templates').strip()
+SHEET_PROD=_secret('SHEET_PROD','product_templates').strip()
+#------A003：Secrets/環境變數讀取工具(結束)：------
 
 
+#------A004：通用工具函式(型別/時間/檔名安全)(開始)：------
+def _to_float(x, default=0.0)->float:
+    try:
+        return float(x)
+    except Exception:
+        try:
+            return float(str(x).strip())
+        except Exception:
+            return float(default)
 
+def _now_tw()->datetime:
+    return datetime.utcnow()+timedelta(hours=8)
 
-#------A005：全頁讀取遮罩防呆（立刻顯示 + 禁止操作）(開始)：------
-import time
+def _safe_name(s:str)->str:
+    s=(s or '').strip() or '訂單'
+    s=re.sub(r'[\\/:*?"<>| ]+','_',s)
+    return s[:60]
 
-def _is_loading() -> bool:
+def _force_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+
+def _apply_editor_state(df: pd.DataFrame, state: Any) -> pd.DataFrame:
+    """
+    將 st.data_editor 的 widget state（dict: edited_rows/added_rows/deleted_rows）
+    套用回 DataFrame。這樣「不按套用變更」也能用畫面上最新勾選/修改來計算。
+    """
+    if df is None:
+        df = pd.DataFrame()
+    out = df.copy()
+
+    if not isinstance(state, dict):
+        return out
+
+    edited_rows = state.get("edited_rows") or {}
+    deleted_rows = state.get("deleted_rows") or []
+    added_rows = state.get("added_rows") or []
+
+    if isinstance(edited_rows, dict) and not out.empty:
+        for ridx, changes in edited_rows.items():
+            try:
+                i = int(ridx)
+            except Exception:
+                continue
+            if i < 0 or i >= len(out):
+                continue
+            if isinstance(changes, dict):
+                for col, val in changes.items():
+                    if col in out.columns:
+                        out.at[out.index[i], col] = val
+
+    if isinstance(deleted_rows, list) and not out.empty:
+        for ridx in sorted(deleted_rows, reverse=True):
+            try:
+                i = int(ridx)
+            except Exception:
+                continue
+            if 0 <= i < len(out):
+                out = out.drop(out.index[i])
+        out = out.reset_index(drop=True)
+
+    if isinstance(added_rows, list):
+        for row in added_rows:
+            if isinstance(row, dict):
+                if out.empty and len(out.columns) == 0:
+                    out = pd.DataFrame(columns=list(row.keys()))
+                safe_row = {c: row.get(c, "") for c in out.columns}
+                out = pd.concat([out, pd.DataFrame([safe_row])], ignore_index=True)
+
+    return out
+
+# ===== Loading 控制（全區塊鎖定）=====
+def _is_loading()->bool:
     return bool(st.session_state.get('_loading', False))
 
-def _loading_msg() -> str:
-    return str(st.session_state.get('_loading_msg', '處理中...'))
+def _set_loading(flag: bool, msg: str = '資料讀取中...'):
+    st.session_state['_loading'] = bool(flag)
+    st.session_state['_loading_msg'] = msg or '資料讀取中...'
 
-def _render_loading_overlay():
-    # ✅ 這個 overlay 會「吃掉滑鼠事件」=> 全頁禁止操作
-    msg = _loading_msg()
-    st.markdown(
-        f"""
-        <style>
-        .yimimi-overlay {{
-            position: fixed;
-            inset: 0;
-            background: rgba(255,255,255,.85);
-            z-index: 999999;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            pointer-events: all;   /* ✅ 關鍵：阻擋點擊 */
-        }}
-        .yimimi-card {{
-            background: #fff;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 10px 30px rgba(0,0,0,.08);
-            border-radius: 14px;
-            padding: 18px 20px;
-            min-width: 280px;
-            max-width: 420px;
-            text-align:center;
-            font-weight: 800;
-        }}
-        .yimimi-sub {{
-            margin-top:6px;
-            font-weight: 600;
-            color:#555;
-            font-size: 13px;
-        }}
-        .yimimi-spin {{
-            width: 34px; height: 34px;
-            border-radius: 999px;
-            border: 4px solid #e5e7eb;
-            border-top-color: #111827;
-            margin: 0 auto 10px auto;
-            animation: yimimi-rot 1s linear infinite;
-        }}
-        @keyframes yimimi-rot {{ to {{ transform: rotate(360deg); }} }}
-        </style>
-        <div class="yimimi-overlay">
-          <div class="yimimi-card">
-            <div class="yimimi-spin"></div>
-            <div>⏳ {msg}</div>
-            <div class="yimimi-sub">請稍候，資料處理完成後即可操作</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+def _loading_msg()->str:
+    return str(st.session_state.get('_loading_msg', '資料讀取中...') or '資料讀取中...')
 
-def _begin_loading(msg: str = "處理中..."):
-    st.session_state['_loading'] = True
-    st.session_state['_loading_msg'] = msg
-    st.session_state['_loading_t0'] = time.time()
-    # ✅ 立刻把遮罩畫出來（這樣你就不會覺得慢半拍）
-    _render_loading_overlay()
+def _loading_overlay_html(msg: str = None) -> str:
+    m = msg or _loading_msg()
+    return f"""
+    <div class="loading-overlay">
+      <div class="loading-box">
+        ⏳ {m}
+        <div class="loading-sub">請稍候，資料處理完成後即可操作</div>
+      </div>
+    </div>
+    """
+
+def _begin_loading(msg: str = '資料讀取中...'):
+    _set_loading(True, msg)
 
 def _end_loading():
-    st.session_state['_loading'] = False
-    st.session_state['_loading_msg'] = ''
-    st.session_state.pop('_loading_t0', None)
-#------A005：全頁讀取遮罩防呆（立刻顯示 + 禁止操作）(結束)：------
+    _set_loading(False, '')
 
+# ===== GAS cache（減少 list/get 的延遲）=====
+@st.cache_data(ttl=20, show_spinner=False)
+def _cache_gas_list(url: str, token: str, sheet: str) -> List[str]:
+    c = GASClient(url, token)
+    return c.list_names(sheet) if c.ready else []
 
-
-#------A006：Google Apps Script(GAS) API Client(開始)：------
-def _get_secret(key: str, default: str = "") -> str:
-    """
-    ✅注意：不改你的 secrets key 名稱
-    只讀取 st.secrets[key]，沒有就回傳 default
-    """
-    try:
-        v = st.secrets.get(key, default)
-        return (v or default) if isinstance(v, str) else default
-    except Exception:
-        return default
-
-# ✅不改 key：就是 GAS_URL / GAS_TOKEN
-GAS_URL   = _get_secret("GAS_URL", "").strip()
-GAS_TOKEN = _get_secret("GAS_TOKEN", "").strip()
-
-class GASClient:
-    """
-    ✅這份是「完整可用版」
-    會提供 template_block 需要的：
-      - list_names(sheet)
-      - get_payload(sheet, name)
-      - create_only(sheet, name, payload)
-      - upsert(sheet, name, payload)
-      - delete(sheet, name)
-    """
-    def __init__(self, url: str, token: str):
-        self.url = (url or "").strip()
-        self.token = (token or "").strip()
-
-    @property
-    def ready(self) -> bool:
-        return bool(self.url and self.token)
-
-    def _call(self, action: str, sheet: str, name: str = "", payload=None) -> dict:
-        if not self.ready:
-            return {"ok": False, "error": "missing_gas_config"}
-
-        params = {"action": action, "sheet": sheet, "token": self.token}
-        if name:
-            params["name"] = name
-
-        try:
-            if action == "upsert":
-                r = requests.post(
-                    self.url,
-                    params=params,
-                    json={"payload_json": json.dumps(payload or {}, ensure_ascii=False)},
-                    timeout=30,
-                )
-            else:
-                r = requests.get(self.url, params=params, timeout=30)
-
-            return r.json()
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-    def list_names(self, sheet: str):
-        d = self._call("list", sheet)
-        return list(d.get("items") or []) if d.get("ok") else []
-
-    def get_payload(self, sheet: str, name: str):
-        d = self._call("get", sheet, name=name)
-        if not d.get("ok"):
-            return None
-        raw = d.get("payload_json") or ""
-        try:
-            return json.loads(raw) if raw else {}
-        except Exception:
-            return None
-
-    def create_only(self, sheet: str, name: str, payload: dict):
-        if name in self.list_names(sheet):
-            return False, "同名模板已存在，請改名後再儲存。"
-        d = self._call("upsert", sheet, name=name, payload=payload)
-        return (True, "已儲存") if d.get("ok") else (False, f"儲存失敗：{d.get('error','未知錯誤')}")
-
-    def upsert(self, sheet: str, name: str, payload: dict):
-        d = self._call("upsert", sheet, name=name, payload=payload)
-        return (True, "已更新") if d.get("ok") else (False, f"更新失敗：{d.get('error','未知錯誤')}")
-
-    def delete(self, sheet: str, name: str):
-        d = self._call("delete", sheet, name=name)
-        return (True, "已刪除") if d.get("ok") else (False, f"刪除失敗：{d.get('error','未知錯誤')}")
-
-gas = GASClient(GAS_URL, GAS_TOKEN)
-#------A006：Google Apps Script(GAS) API Client(結束)：------
-
-
-#------A006b：GAS 快取輔助（list/get/save/delete + clear cache）(開始)：------
-import streamlit as st
-
-def _gas_ready() -> bool:
-    try:
-        return bool(gas and gas.ready)
-    except Exception:
-        return False
-
-@st.cache_data(show_spinner=False, ttl=30)
-def _cache_gas_list(sheet: str) -> list[str]:
-    if not _gas_ready():
-        return []
-    try:
-        names = gas.list_names(sheet) or []
-        out = []
-        for n in names:
-            s = str(n).strip()
-            if s:
-                out.append(s)
-        return sorted(set(out))
-    except Exception:
-        return []
-
-@st.cache_data(show_spinner=False, ttl=30)
-def _cache_gas_get(sheet: str, name: str) -> dict | None:
-    if not _gas_ready():
-        return None
-    try:
-        payload = gas.get_payload(sheet, name)
-        return payload if isinstance(payload, dict) else None
-    except Exception:
-        return None
-
-def _gas_upsert(sheet: str, name: str, payload: dict) -> tuple[bool, str]:
-    if not _gas_ready():
-        return False, "GAS 未設定（請確認 Secrets：GAS_URL / GAS_TOKEN）"
-    try:
-        ok, msg = gas.upsert(sheet, name, payload)
-        _gas_cache_clear()
-        return ok, msg
-    except Exception as e:
-        return False, f"更新失敗：{e}"
-
-def _gas_create_only(sheet: str, name: str, payload: dict) -> tuple[bool, str]:
-    if not _gas_ready():
-        return False, "GAS 未設定（請確認 Secrets：GAS_URL / GAS_TOKEN）"
-    try:
-        ok, msg = gas.create_only(sheet, name, payload)
-        _gas_cache_clear()
-        return ok, msg
-    except Exception as e:
-        return False, f"儲存失敗：{e}"
-
-def _gas_delete(sheet: str, name: str) -> tuple[bool, str]:
-    if not _gas_ready():
-        return False, "GAS 未設定（請確認 Secrets：GAS_URL / GAS_TOKEN）"
-    try:
-        ok, msg = gas.delete(sheet, name)
-        _gas_cache_clear()
-        return ok, msg
-    except Exception as e:
-        return False, f"刪除失敗：{e}"
+@st.cache_data(ttl=20, show_spinner=False)
+def _cache_gas_get(url: str, token: str, sheet: str, name: str) -> Optional[Dict[str, Any]]:
+    c = GASClient(url, token)
+    return c.get_payload(sheet, name) if c.ready else None
 
 def _gas_cache_clear():
     try:
-        _cache_gas_list.clear()
+        st.cache_data.clear()
     except Exception:
         pass
-    try:
-        _cache_gas_get.clear()
-    except Exception:
-        pass
-#------A006b：GAS 快取輔助（list/get/save/delete + clear cache）(結束)：------
+#------A004：通用工具函式(型別/時間/檔名安全)(結束)：------
 
 
 
-#------A007：Action / 真防呆 Loading Overlay / Watchdog（唯一版本）(開始)：------
-import time
-import traceback
-import streamlit as st
+#------A005：Google Apps Script(GAS) API Client(開始)：------
+class GASClient:
+    def __init__(self,url:str,token:str):
+        self.url=url.strip(); self.token=token.strip()
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+    @property
+    def ready(self)->bool: 
+        return bool(self.url and self.token)
 
-def _action_defaults_once():
-    ss = st.session_state
-    ss.setdefault("_action", None)         # {"type": "...", "payload": {...}}
-    ss.setdefault("_loading", False)       # bool
-    ss.setdefault("_loading_msg", "")      # str
-    ss.setdefault("_loading_since", 0)     # ms
-    ss.setdefault("_render_nonce", 0)      # int（plotly key 用）
+    def _call(self, action:str, sheet:str, name:str='', payload:Optional[Dict[str,Any]]=None)->Dict[str,Any]:
+        if not self.ready: 
+            return {'ok':False,'error':'missing_gas_config'}
+        params={'action':action,'sheet':sheet,'token':self.token}
+        if name: 
+            params['name']=name
+        try:
+            if action=='upsert':
+                r=requests.post(
+                    self.url, 
+                    params=params, 
+                    json={'payload_json': json.dumps(payload or {}, ensure_ascii=False)}
+                )
+            else:
+                r=requests.get(self.url, params=params)
+            return r.json()
+        except Exception as e:
+            return {'ok':False,'error':str(e)}
 
-def _is_loading() -> bool:
-    return bool(st.session_state.get("_loading", False))
+    def list_names(self,sheet:str)->List[str]:
+        d=self._call('list',sheet)
+        return list(d.get('items') or []) if d.get('ok') else []
 
-def _has_action() -> bool:
-    a = st.session_state.get("_action")
-    return isinstance(a, dict) and bool(a.get("type"))
+    def get_payload(self,sheet:str,name:str)->Optional[Dict[str,Any]]:
+        d=self._call('get',sheet,name=name)
+        if not d.get('ok'): 
+            return None
+        raw=d.get('payload_json') or ''
+        try: 
+            return json.loads(raw) if raw else {}
+        except Exception: 
+            return None
 
-def _set_loading(on: bool, msg: str = ""):
-    st.session_state["_loading"] = bool(on)
-    st.session_state["_loading_msg"] = msg or ""
-    if on:
-        st.session_state["_loading_since"] = _now_ms()
+    def create_only(self,sheet:str,name:str,payload:Dict[str,Any])->Tuple[bool,str]:
+        if name in self.list_names(sheet):
+            return False,'同名模板已存在，請改名後再儲存。'
+        d=self._call('upsert',sheet,name=name,payload=payload)
+        return (True,'已儲存') if d.get('ok') else (False, f"儲存失敗：{d.get('error','未知錯誤')}")
 
-def _render_loading_overlay():
-    msg = st.session_state.get("_loading_msg") or "處理中，請稍候..."
-    st.markdown(
-        f"""
-        <div style="
-          position:fixed;inset:0;z-index:999999;
-          background:rgba(255,255,255,0.85);
-          display:flex;align-items:center;justify-content:center;
-          pointer-events:all;
-        ">
-          <div style="
-            width:min(520px,92vw);
-            background:#fff;border:1px solid #eee;border-radius:18px;
-            padding:18px 18px;box-shadow:0 10px 30px rgba(0,0,0,0.08);
-            font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans TC',sans-serif;
-          ">
-            <div style="font-size:16px;font-weight:800;margin-bottom:8px;">⏳ 讀取中</div>
-            <div style="font-size:14px;line-height:1.6;color:#333;">{msg}</div>
-            <div style="margin-top:12px;font-size:12px;color:#777;">請不要關閉或重新整理頁面</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    def upsert(self,sheet:str,name:str,payload:Dict[str,Any])->Tuple[bool,str]:
+        # 覆寫儲存（用於：套用變更後同步回寫雲端模板）
+        d=self._call('upsert',sheet,name=name,payload=payload)
+        return (True,'已更新') if d.get('ok') else (False, f"更新失敗：{d.get('error','未知錯誤')}")
 
-def _loading_watchdog(timeout_sec: int = 60):
-    if not _is_loading():
-        return
-    since = int(st.session_state.get("_loading_since") or 0)
-    if since <= 0:
-        return
-    if (_now_ms() - since) > timeout_sec * 1000:
-        _set_loading(False, "")
-        st.session_state["_action"] = None
-        st.error("⚠️ 讀取逾時，已自動解除防呆。請再試一次或查看 logs。")
+    def delete(self,sheet:str,name:str)->Tuple[bool,str]:
+        d=self._call('delete',sheet,name=name)
+        return (True,'已刪除') if d.get('ok') else (False, f"刪除失敗：{d.get('error','未知錯誤')}")
 
-def _trigger(action_type: str, msg: str = "處理中，請稍候...", payload: dict | None = None):
-    st.session_state["_action"] = {"type": action_type, "payload": payload or {}}
-    _set_loading(True, msg)
-    st.rerun()
-
-def _handle_action(handlers: dict):
-    if not _has_action():
-        return
-
-    a = st.session_state.get("_action") or {}
-    t = a.get("type")
-    payload = a.get("payload") or {}
-    st.session_state["_action"] = None
-
-    try:
-        fn = handlers.get(t)
-        if fn is None:
-            raise RuntimeError(f"Unknown action: {t}")
-        fn(payload)
-        _set_loading(False, "")
-    except Exception as e:
-        _set_loading(False, "")
-        st.error(f"❌ 執行失敗：{e}")
-        st.code(traceback.format_exc())
-
-def _bump_render_nonce():
-    st.session_state["_render_nonce"] = int(st.session_state.get("_render_nonce", 0)) + 1
-    return st.session_state["_render_nonce"]
-#------A007：Action / 真防呆 Loading Overlay / Watchdog（唯一版本）(結束)：------
+gas=GASClient(GAS_URL,GAS_TOKEN)
+#------A005：Google Apps Script(GAS) API Client(結束)：------
 
 
 
-#------A008：初始化 Session State（_ensure_defaults 安全版）(開始)：------
-from datetime import datetime
-
+#------A006：Session State 預設值初始化(開始)：------
 def _ensure_defaults():
-    # ---- 時間來源：有 _now_tw 用 _now_tw，沒有就用本機 now ----
-    try:
-        now = _now_tw()  # type: ignore
-    except Exception:
-        now = datetime.now()
+    if 'layout_mode' not in st.session_state: 
+        st.session_state.layout_mode='左右 50% / 50%'
+    if 'order_name' not in st.session_state: 
+        st.session_state.order_name=f"訂單_{_now_tw().strftime('%Y%m%d')}"
+    if 'df_box' not in st.session_state:
+        st.session_state.df_box=pd.DataFrame([
+            {'選取':True,'名稱':'手動箱','長':35.0,'寬':25.0,'高':20.0,'數量':1,'空箱重量':0.50}
+        ])
+    if 'df_prod' not in st.session_state:
+        st.session_state.df_prod=pd.DataFrame([
+            {'選取':True,'商品名稱':'禮盒(米餅)','長':21.0,'寬':14.0,'高':8.5,'重量(kg)':0.50,'數量':5}
+        ])
+    if 'active_box_tpl' not in st.session_state: 
+        st.session_state.active_box_tpl=''
+    if 'active_prod_tpl' not in st.session_state: 
+        st.session_state.active_prod_tpl=''
+    if 'last_result' not in st.session_state: 
+        st.session_state.last_result=None
+#------A006：Session State 預設值初始化(結束)：------
 
-    # ---- 基本狀態 ----
-    if "order_name" not in st.session_state or not st.session_state.get("order_name"):
-        st.session_state.order_name = f"訂單_{now.strftime('%Y%m%d')}"
 
-    # 版面配置
-    if "layout_mode" not in st.session_state:
-        st.session_state.layout_mode = "左右50/50"
+#------A007：外箱資料清理/防呆(開始)：------
+def _sanitize_box(df:pd.DataFrame)->pd.DataFrame:
+    cols=['選取','名稱','長','寬','高','數量','空箱重量']
+    if df is None:
+        df=pd.DataFrame(columns=cols)
+    df=df.copy()
+    for c in cols:
+        if c not in df.columns:
+            df[c]='' if c=='名稱' else 0
+    df=df[cols].fillna('')
 
-    # DataFrame（外箱/商品）確保存在
-    if "df_box" not in st.session_state or st.session_state.df_box is None:
-        st.session_state.df_box = pd.DataFrame(columns=["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"])
+    # 空表就直接回傳空表（不要強塞預設值）
+    if df.empty:
+        return pd.DataFrame(columns=cols)
 
-    if "df_prod" not in st.session_state or st.session_state.df_prod is None:
-        st.session_state.df_prod = pd.DataFrame(columns=["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"])
+    df['選取']=df['選取'].astype(bool)
+    df['名稱']=df['名稱'].astype(str).str.strip()
+    for c in ['長','寬','高','空箱重量']:
+        df[c]=df[c].apply(_to_float)
+    df['數量']=df['數量'].apply(lambda x:int(_to_float(x,0)))
 
-    # 模板狀態
-    if "active_box_tpl" not in st.session_state:
-        st.session_state.active_box_tpl = "未選擇"
-    if "active_prod_tpl" not in st.session_state:
-        st.session_state.active_prod_tpl = "未選擇"
+    def empty_row(r):
+        return (not r['名稱']) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
 
-    # 計算結果暫存
-    if "pack_result" not in st.session_state:
-        st.session_state.pack_result = None
+    df=df[~df.apply(empty_row,axis=1)].reset_index(drop=True)
 
-    # Loading / Action（若你有用防呆遮罩）
-    if "_loading" not in st.session_state:
-        st.session_state._loading = False
-    if "_loading_msg" not in st.session_state:
-        st.session_state._loading_msg = ""
-    if "_action" not in st.session_state:
-        st.session_state._action = None
+    # 清理完如果變空，也保持空（不回填預設）
+    if df.empty:
+        return pd.DataFrame(columns=cols)
 
-#------A008：初始化 Session State（_ensure_defaults 安全版）(結束)：------
+    return df
+#------A007：外箱資料清理/防呆(結束)：------
+
+
+
+#------A008：商品資料清理/防呆(開始)：------
+def _sanitize_prod(df:pd.DataFrame)->pd.DataFrame:
+    cols=['選取','商品名稱','長','寬','高','重量(kg)','數量']
+    if df is None:
+        df=pd.DataFrame(columns=cols)
+    df=df.copy()
+    for c in cols:
+        if c not in df.columns:
+            df[c]='' if c=='商品名稱' else 0
+    df=df[cols].fillna('')
+
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    df['選取']=df['選取'].astype(bool)
+    df['商品名稱']=df['商品名稱'].astype(str).str.strip()
+    for c in ['長','寬','高','重量(kg)']:
+        df[c]=df[c].apply(_to_float)
+    df['數量']=df['數量'].apply(lambda x:int(_to_float(x,0)))
+
+    def empty_row(r):
+        return (not r['商品名稱']) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
+
+    df=df[~df.apply(empty_row,axis=1)].reset_index(drop=True)
+
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    return df
+#------A008：商品資料清理/防呆(結束)：------
 
 
 
@@ -686,91 +411,106 @@ def _prod_from(payload):
 
 
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(開始)：------
-import streamlit as st
-
-def template_block(title: str, sheet: str, active_key: str, df_key: str,
-                   to_payload, from_payload, key_prefix: str):
+def template_block(title:str, sheet:str, active_key:str, df_key:str, to_payload, from_payload, key_prefix:str):
     st.markdown(f"### {title}（載入 / 儲存 / 刪除）")
-
-    if not _gas_ready():
-        st.info("尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。")
+    if not gas.ready:
+        st.info('尚未設定 Streamlit Secrets（GAS_URL / GAS_TOKEN）。模板功能暫停。')
         return
 
-    names = ["(無)"] + _cache_gas_list(sheet)
+    loading = _is_loading()
 
-    c1, c2 = st.columns([1, 1], gap="medium")
+    # ✅ 用 cache 減少清單讀取延遲
+    names = ['(無)'] + sorted(_cache_gas_list(GAS_URL, GAS_TOKEN, sheet))
+
+    c1, c2 = st.columns([1, 1], gap='medium')
     c3 = st.container()
 
     with c1:
-        sel = st.selectbox("選擇模板", names, key=f"{key_prefix}_sel")
-        load_btn = st.button("⬇️ 載入模板", use_container_width=True, key=f"{key_prefix}_load")
-
+        sel = st.selectbox('選擇模板', names, key=f'{key_prefix}_sel', disabled=loading)
+        load_btn = st.button('⬇️ 載入模板', use_container_width=True, key=f'{key_prefix}_load', disabled=loading)
     with c2:
-        del_sel = st.selectbox("要刪除的模板", names, key=f"{key_prefix}_del_sel")
-        del_btn = st.button("🗑️ 刪除模板", use_container_width=True, key=f"{key_prefix}_del")
-
+        del_sel = st.selectbox('要刪除的模板', names, key=f'{key_prefix}_del_sel', disabled=loading)
+        del_btn = st.button('🗑️ 刪除模板', use_container_width=True, key=f'{key_prefix}_del', disabled=loading)
     with c3:
-        new_name = st.text_input("另存為模板名稱", placeholder="例如：常用A", key=f"{key_prefix}_new")
-        save_btn = st.button("💾 儲存模板", use_container_width=True, key=f"{key_prefix}_save")
+        new_name = st.text_input('另存為模板名稱', placeholder='例如：常用A', key=f'{key_prefix}_new', disabled=loading)
+        save_btn = st.button('💾 儲存模板', use_container_width=True, key=f'{key_prefix}_save', disabled=loading)
 
-    # ===== 載入 =====
+    # ===== 動作：載入 =====
     if load_btn:
-        if sel == "(無)":
-            st.warning("請先選擇要載入的模板")
+        if sel == '(無)':
+            st.warning('請先選擇要載入的模板')
         else:
-            payload = _cache_gas_get(sheet, sel)
-            if payload is None:
-                st.error("載入失敗：讀不到模板資料（請確認 GAS 權限/連線）")
-            else:
-                try:
+            _begin_loading('讀取模板中...')
+            try:
+                # ✅ 用 cache 取 payload（比較快）
+                payload = _cache_gas_get(GAS_URL, GAS_TOKEN, sheet, sel)
+                if payload is None:
+                    st.error('載入失敗：請確認雲端連線 / 權限')
+                else:
                     df_loaded = from_payload(payload)
                     st.session_state[df_key] = df_loaded
                     st.session_state[active_key] = sel
 
-                    # 同步 live df：確保 3D 會吃到最新資料
-                    if df_key == "df_box":
-                        st.session_state["_box_live_df"] = df_loaded.copy()
-                        st.session_state.pop("box_editor", None)
-                    if df_key == "df_prod":
-                        st.session_state["_prod_live_df"] = df_loaded.copy()
-                        st.session_state.pop("prod_editor", None)
+                    # ✅ 載入後同步更新「live df」，確保 3D 計算讀到的是最新畫面資料
+                    if df_key == 'df_box':
+                        st.session_state['_box_live_df'] = df_loaded.copy()
+                        st.session_state.pop('box_editor', None)
+                    if df_key == 'df_prod':
+                        st.session_state['_prod_live_df'] = df_loaded.copy()
+                        st.session_state.pop('prod_editor', None)
 
-                    st.success(f"已載入：{sel}")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"套用模板失敗：{e}")
+                    st.success(f'已載入：{sel}')
 
-    # ===== 儲存 =====
+                    # ✅ 模板資料變動：清 cache，避免下次清單/內容不更新
+                    _gas_cache_clear()
+
+                    _force_rerun()
+            except Exception as e:
+                st.error(f'載入解析失敗：{e}')
+            finally:
+                _end_loading()
+
+    # ===== 動作：儲存 =====
     if save_btn:
-        nm = (new_name or "").strip()
+        nm = (new_name or '').strip()
         if not nm:
-            st.warning("請先輸入「另存為模板名稱」")
+            st.warning('請先輸入「另存為模板名稱」')
         else:
-            payload = to_payload(st.session_state[df_key])
-            ok, msg = _gas_create_only(sheet, nm, payload)
-            if ok:
-                st.session_state[active_key] = nm
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
+            _begin_loading('儲存模板中...')
+            try:
+                ok, msg = gas.create_only(sheet, nm, to_payload(st.session_state[df_key]))
+                if ok:
+                    st.session_state[active_key] = nm
+                    st.success(msg)
+                    _gas_cache_clear()
+                    _force_rerun()
+                else:
+                    st.error(msg)
+            finally:
+                _end_loading()
 
-    # ===== 刪除 =====
+    # ===== 動作：刪除 =====
     if del_btn:
-        if del_sel == "(無)":
-            st.warning("請先選擇要刪除的模板")
+        if del_sel == '(無)':
+            st.warning('請先選擇要刪除的模板')
         else:
-            ok, msg = _gas_delete(sheet, del_sel)
-            if ok:
-                if st.session_state.get(active_key) == del_sel:
-                    st.session_state[active_key] = ""
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
+            _begin_loading('刪除模板中...')
+            try:
+                ok, msg = gas.delete(sheet, del_sel)
+                if ok:
+                    if st.session_state.get(active_key) == del_sel:
+                        st.session_state[active_key] = ''
+                    st.success(msg)
+                    _gas_cache_clear()
+                    _force_rerun()
+                else:
+                    st.error(msg)
+            finally:
+                _end_loading()
 
     st.caption(f"目前套用：{st.session_state.get(active_key) or '未選擇'}")
 #------A010：模板區塊 UI（載入 / 儲存 / 刪除）(結束)：------
+
 
 
 
@@ -968,12 +708,45 @@ def prod_table_block():
 
 
 
-#------A013：模板區塊 template_block（修正：避免重複定義造成覆蓋）(開始)：------
-# ✅ 重要：此檔案只保留 A010 的 template_block() 作為唯一版本
-# ✅ A013 不再重複定義 template_block，避免覆蓋 A010 造成 NameError
+#------A013：外箱選擇/商品展開為 Item(開始)：------
+def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
+    bins=[]
+    for _,r in df_box.iterrows():
+        if not bool(r.get('選取', False)):
+            continue
+        qty=int(r.get('數量',0) or 0)
+        if qty<=0:
+            continue
+        L=float(r.get('長',0) or 0)
+        W=float(r.get('寬',0) or 0)
+        H=float(r.get('高',0) or 0)
+        if L<=0 or W<=0 or H<=0:
+            continue
+        name=(str(r.get('名稱','') or '').strip() or '外箱')
+        tare=float(r.get('空箱重量',0) or 0)
+        for i in range(qty):
+            bins.append({'name':name,'l':L,'w':W,'h':H,'tare':tare})
+    return bins
 
-#（保留空段即可）
-#------A013：模板區塊 template_block（修正：避免重複定義造成覆蓋）(結束)：------
+def _build_items(df_prod:pd.DataFrame)->List[Item]:
+    items=[]
+    for _,r in df_prod.iterrows():
+        if not bool(r.get('選取', False)):
+            continue
+        qty=int(r.get('數量',0) or 0)
+        if qty<=0:
+            continue
+        L=float(r.get('長',0) or 0)
+        W=float(r.get('寬',0) or 0)
+        H=float(r.get('高',0) or 0)
+        if L<=0 or W<=0 or H<=0:
+            continue
+        nm=(str(r.get('商品名稱','') or '').strip() or '商品')
+        wt=float(r.get('重量(kg)',0) or 0)
+        for i in range(qty):
+            items.append(Item(f"{nm}_{i+1}", L, W, H, wt))
+    return items
+#------A013：外箱選擇/商品展開為 Item(結束)：------
 
 
 
@@ -1283,197 +1056,183 @@ def _total_items(df_prod:pd.DataFrame)->int:
 
 
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(開始)：------
-import time
-import streamlit as st
-
-def _legend_html_from_color_map(color_map: dict) -> str:
-    if not color_map:
-        return ""
-    rows = []
-    for k, c in color_map.items():
-        rows.append(
-            f"<div style='display:flex;align-items:center;gap:8px;margin:6px 0;'>"
-            f"<span style='width:14px;height:14px;border:2px solid #111;border-radius:3px;background:{c};display:inline-block'></span>"
-            f"<span style='font-weight:700'>{k}</span>"
-            f"</div>"
-        )
-    return "<div style='border:1px solid #eee;border-radius:12px;padding:10px 10px;'>" + "".join(rows) + "</div>"
-
-def _bump_render_nonce():
-    st.session_state["_render_nonce"] = int(st.session_state.get("_render_nonce", 0)) + 1
-    return st.session_state["_render_nonce"]
-
 def result_block():
-    # ✅ 第二段：如果上一輪按了按鈕，這輪就在這裡真的執行
-    def _do_run_3d(_payload: dict):
-        order_name = st.session_state.get("order_name") or "未命名訂單"
+    st.markdown('## 3. 裝箱結果與模擬')
 
-        # 優先用 live df（使用者正在編輯 data_editor 時，這份才是最新）
-        df_box  = st.session_state.get("_box_live_df")  or st.session_state.get("df_box")
-        df_prod = st.session_state.get("_prod_live_df") or st.session_state.get("df_prod")
+    loading = _is_loading()
 
-        res = pack_and_render(order_name, df_box, df_prod)
-        if not res.get("ok"):
-            st.session_state["pack_result"] = None
-            raise RuntimeError(res.get("error") or "裝箱計算失敗")
-
-        packed_bins = res.get("packed_bins") or []
-        color_map = res.get("color_map") or {}
-        legend_html = _legend_html_from_color_map(color_map)
-
-        figs = []
-        boxes = []
-        for i, pb in enumerate(packed_bins):
-            box = pb.get("box") or {}
-            items = pb.get("items") or []
-            figs.append(build_3d_fig(box, items, color_map=color_map))
-            boxes.append({
-                "title": pb.get("name") or f"外箱{i+1}",
-                "name": box.get("name") or "",
-                "count": len(items),
-            })
-
-        # 報告 HTML（可選）
-        report_html = ""
+    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+        _begin_loading('計算與 3D 模擬中...')
         try:
-            report_html = build_report_html(
-                order_name=order_name,
-                packed_bins=packed_bins,
-                unfitted=res.get("unfitted") or [],
-                content_wt=float(res.get("content_wt") or 0),
-                total_wt=float(res.get("total_wt") or 0),
-                util=float(res.get("util") or 0),
-                color_map=color_map,
-            )
-        except Exception:
-            report_html = ""
+            df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
+            df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
 
-        st.session_state["pack_result"] = {
-            "figs": figs,
-            "boxes": boxes,
-            "color_map": color_map,
-            "legend_html": legend_html,
-            "report_html": report_html,
-        }
+            st.session_state.df_box  = _sanitize_box(df_box_src)
+            st.session_state.df_prod = _sanitize_prod(df_prod_src)
 
-        # ✅ 每次算完 bump nonce，避免 plotly key 撞
-        _bump_render_nonce()
+            with st.spinner('計算中...'):
+                st.session_state.last_result = pack_and_render(
+                    st.session_state.order_name,
+                    st.session_state.df_box,
+                    st.session_state.df_prod
+                )
+            _force_rerun()
+        finally:
+            _end_loading()
 
-    _handle_action({"RUN_3D": _do_run_3d})
-
-    st.markdown("## 3. 裝箱結果與模擬")
-
-    if st.button("🚀 開始計算與 3D 模擬", use_container_width=True, key=f"btn_run3d_{int(time.time()*1000)}"):
-        _trigger("RUN_3D", "正在計算與產生 3D 模擬，請稍候...")
-
-    res = st.session_state.get("pack_result")
+    res = st.session_state.get('last_result')
     if not res:
-        st.info("尚未計算 3D。請按上方「開始計算與 3D 模擬」。")
+        return
+    if not res.get('ok'):
+        st.error(res.get('error', '計算失敗'))
         return
 
-    figs = res.get("figs") or []
-    boxes = res.get("boxes") or []
-    legend_html = res.get("legend_html") or ""
+    packed_bins = res.get('packed_bins') or []
+    unfitted = res.get('unfitted') or []
+    color_map = res.get('color_map') or {}
 
-    run_id = int(st.session_state.get("_render_nonce", 0))
+    # ✅ 每次顯示時都用「目前結果」重建 report_html，確保下載內容與畫面一致
+    res['report_html'] = build_report_html(
+        st.session_state.order_name,
+        packed_bins=packed_bins,
+        unfitted=unfitted,
+        content_wt=float(res.get('content_wt', 0.0) or 0.0),
+        total_wt=float(res.get('total_wt', 0.0) or 0.0),
+        util=float(res.get('util', 0.0) or 0.0),
+        color_map=color_map
+    )
+    st.session_state.last_result = res
 
-    tab_titles = []
-    for i, b in enumerate(boxes):
-        title = b.get("title") or f"外箱{i+1}"
-        cnt = b.get("count")
-        tab_titles.append(f"{title}（{cnt}件）" if cnt is not None else title)
+    # ===== 報告摘要 =====
+    st.markdown("### 🧾 訂單裝箱報告")
+    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
 
-    tabs = st.tabs(tab_titles if tab_titles else ["外箱1"])
+    used_bin_count = int(res.get('used_bin_count', 0))
+    st.markdown(
+        f"""
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div>🧾 <b>訂單名稱</b>　<span style="color:#1f6feb;font-weight:900">{st.session_state.order_name}</span></div>
+          <div>🕒 <b>計算時間</b>　{_now_tw().strftime('%Y-%m-%d %H:%M:%S (台灣時間)')}</div>
+          <div>📦 <b>使用箱數</b>　<b>{used_bin_count}</b> 箱（可混用不同箱型）</div>
+          <div>⚖️ <b>內容淨重</b>　{float(res.get('content_wt',0.0) or 0.0):.2f} kg</div>
+          <div>🔴 <b>本次總重</b>　<span style="color:#c62828;font-weight:900">{float(res.get('total_wt',0.0) or 0.0):.2f} kg</span></div>
+          <div>📊 <b>整體空間利用率</b>　{float(res.get('util',0.0) or 0.0):.2f}%（以實際用到的箱子總體積計算）</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    for i, t in enumerate(tabs):
+    # 未裝入警示
+    if unfitted:
+        counts = {}
+        for it in unfitted:
+            base = str(it.name).split('_')[0]
+            counts[base] = counts.get(base, 0) + 1
+        st.warning('注意：有部分商品裝不下！（可能是箱型庫存不足或尺寸不夠）')
+        for k, v in counts.items():
+            st.error(f"{k}：超過 {v} 個")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ===== 下載完整報告 =====
+    ts = _now_tw().strftime('%Y%m%d_%H%M')
+    fname = f"{_safe_name(st.session_state.order_name)}_{ts}_總數{_total_items(st.session_state.df_prod)}件.html"
+    st.download_button(
+        '⬇️ 下載完整裝箱報告（.html）',
+        data=res['report_html'].encode('utf-8'),
+        file_name=fname,
+        mime='text/html',
+        use_container_width=True,
+        key='dl_report'
+    )
+
+    # ===== 3D：改回 Tabs（每箱一頁）+ 旁邊顯示 legend =====
+    if not packed_bins:
+        st.info("本次沒有任何箱子成功裝入商品（可能全部商品尺寸不合）。")
+        return
+
+    # legend HTML（同色塊+品項名）
+    legend_html = "<div style='display:flex;flex-direction:column;gap:6px'>"
+    legend_html += "<div style='font-weight:900;margin-bottom:4px'>分類說明</div>"
+    for k, c in (color_map or {}).items():
+        legend_html += (
+            "<div style='display:flex;align-items:center;gap:8px'>"
+            f"<span style='width:14px;height:14px;border:2px solid #111;border-radius:3px;background:{c};display:inline-block'></span>"
+            f"<span>{k}</span></div>"
+        )
+    legend_html += "</div>"
+
+    tab_titles = [f"{p['name']}（裝入 {len(p.get('items') or [])} 件）" for p in packed_bins]
+    tabs = st.tabs(tab_titles)
+
+    for t, p in zip(tabs, packed_bins):
         with t:
-            c1, c2 = st.columns([0.25, 0.75], gap="large")
+            box_meta = p['box']
+            fitted = list(p.get('items') or [])
+
+            c1, c2 = st.columns([1, 3], gap='large')
             with c1:
-                st.markdown("### 分類顏色說明")
-                if legend_html:
-                    st.markdown(legend_html, unsafe_allow_html=True)
-                else:
-                    st.caption("（尚無分類顏色資料）")
-
-                if i < len(boxes):
-                    bi = boxes[i]
-                    st.markdown("### 本箱資訊")
-                    st.write(f"裝入件數：**{bi.get('count', 0)}** 件")
-                    if bi.get("title"):
-                        st.write(f"箱名：**{bi.get('title')}**")
-
+                st.markdown(legend_html, unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='margin-top:10px;color:#444'>箱子尺寸：{box_meta['l']} × {box_meta['w']} × {box_meta['h']}</div>",
+                    unsafe_allow_html=True
+                )
             with c2:
-                if i < len(figs) and figs[i] is not None:
-                    st.plotly_chart(figs[i], use_container_width=True, key=f"plotly_box_{run_id}_{i}")
-                else:
-                    st.info("此箱沒有 3D 圖可顯示。")
+                fig = build_3d_fig(box_meta, fitted, color_map=color_map)
+                st.plotly_chart(fig, use_container_width=True)
 #------A018：結果區塊 UI（開始計算 + 顯示結果 + 下載HTML）(結束)：------
 
 
 
-#------A019：主程式 UI（修正版：不再使用 main() 內的 if _has_action()）(開始)：------
-import streamlit as st
 
+#------A019：主程式 UI（版面配置：左右 / 上下）(開始)：------
 def main():
     _ensure_defaults()
+    st.title('📦 3D裝箱系統')
 
-    # ✅ 只要 loading 就顯示遮罩（不卡 UI）
-    _loading_watchdog(timeout_sec=60)
-    if _is_loading():
-        _render_loading_overlay()
-
-    st.title("📦 3D裝箱系統")
-
-    st.markdown("#### 版面配置")
-    mode = st.radio(
-        "",
-        ["左右 50% / 50%", "上下（垂直）"],
-        horizontal=True,
-        key="layout_radio",
-        index=0 if st.session_state.layout_mode == "左右 50% / 50%" else 1,
+    st.markdown('#### 版面配置')
+    mode=st.radio(
+        '', 
+        ['左右 50% / 50%','上下（垂直）'], 
+        horizontal=True, 
+        key='layout_radio', 
+        index=0 if st.session_state.layout_mode=='左右 50% / 50%' else 1
     )
-    st.session_state.layout_mode = mode
+    st.session_state.layout_mode=mode
 
-    st.text_input("訂單名稱", key="order_name")
+    st.text_input('訂單名稱', key='order_name')
 
-    if st.session_state.layout_mode == "左右 50% / 50%":
-        left, right = st.columns([1, 1], gap="large")
+    if mode=='左右 50% / 50%':
+        left,right=st.columns(2,gap='large')
         with left:
-            st.markdown("## 1. 訂單與外箱")
-            template_block("箱型模板（載入 / 儲存 / 刪除）", SHEET_BOX, "active_box_tpl", "df_box",
-                           _box_payload, _box_from, "box_tpl_v")
+            st.markdown('## 1. 訂單與外箱')
+            template_block('箱型模板', SHEET_BOX, 'active_box_tpl', 'df_box', _box_payload, _box_from, 'box_tpl')
             box_table_block()
-
         with right:
-            st.markdown("## 2. 商品清單")
-            template_block("商品模板（載入 / 儲存 / 刪除）", SHEET_PROD, "active_prod_tpl", "df_prod",
-                           _prod_payload, _prod_from, "prod_tpl_v")
+            st.markdown('## 2. 商品清單')
+            template_block('商品模板', SHEET_PROD, 'active_prod_tpl', 'df_prod', _prod_payload, _prod_from, 'prod_tpl')
             prod_table_block()
 
         st.divider()
         result_block()
 
     else:
-        st.markdown("## 1. 訂單與外箱")
-        template_block("箱型模板（載入 / 儲存 / 刪除）", SHEET_BOX, "active_box_tpl", "df_box",
-                       _box_payload, _box_from, "box_tpl_v")
+        st.markdown('## 1. 訂單與外箱')
+        template_block('箱型模板', SHEET_BOX, 'active_box_tpl', 'df_box', _box_payload, _box_from, 'box_tpl_v')
         box_table_block()
 
         st.divider()
 
-        st.markdown("## 2. 商品清單")
-        template_block("商品模板（載入 / 儲存 / 刪除）", SHEET_PROD, "active_prod_tpl", "df_prod",
-                       _prod_payload, _prod_from, "prod_tpl_v")
+        st.markdown('## 2. 商品清單')
+        template_block('商品模板', SHEET_PROD, 'active_prod_tpl', 'df_prod', _prod_payload, _prod_from, 'prod_tpl_v')
         prod_table_block()
 
         st.divider()
         result_block()
-#------A019：主程式 UI（修正版：不再使用 main() 內的 if _has_action()）(結束)：------
+#------A019：主程式 UI（版面配置：左右 / 上下）(結束)：------
 
 
-#------A020：程式入口（避免覆蓋 main / 防止白屏）(開始)：------
-# ⚠️ 不要再定義第二個 main()，會覆蓋 A019 的主程式 main()
-# Streamlit 需要在檔案最後呼叫一次 main() 才會渲染 UI
-
-main()
-#------A020：程式入口（避免覆蓋 main / 防止白屏）(結束)：------
+#------A020：程式進入點(開始)：------
+if __name__=='__main__':
+    main()
+#------A020：程式進入點(結束)：------
