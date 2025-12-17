@@ -1,4 +1,122 @@
 # -*- coding: utf-8 -*-
+#------A000：常數 + 基礎工具（必須放在 A001 之前）(開始)：------
+from __future__ import annotations
+
+import re
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from typing import Any, Dict, List, Tuple, Optional
+
+import pandas as pd
+import streamlit as st
+from py3dbp import Item
+
+# ✅ 你 main() 會用到的 sheet 名稱（這兩個一定要存在）
+SHEET_BOX  = "BOX_TPL"
+SHEET_PROD = "PROD_TPL"
+
+def _now_tw() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Taipei"))
+
+def _safe_name(s: str) -> str:
+    s = str(s or "")
+    s = re.sub(r'[\\/:*?"<>|]+', "_", s)  # windows 不合法字元
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or "未命名"
+
+def _to_float(v: Any, default: float = 0.0) -> float:
+    try:
+        if v is None:
+            return float(default)
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip()
+        if s == "":
+            return float(default)
+        return float(s)
+    except Exception:
+        return float(default)
+
+def _sanitize_box(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"])
+    df = df.copy()
+    # 欄位補齊
+    for c in ["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]:
+        if c not in df.columns:
+            df[c] = "" if c == "名稱" else 0
+    # 型別整理
+    df["選取"] = df["選取"].astype(bool)
+    df["名稱"] = df["名稱"].astype(str)
+    for c in ["長", "寬", "高", "空箱重量"]:
+        df[c] = df[c].apply(lambda x: _to_float(x, 0.0))
+    df["數量"] = df["數量"].apply(lambda x: int(_to_float(x, 0)))
+    return df[["選取", "名稱", "長", "寬", "高", "數量", "空箱重量"]]
+
+def _sanitize_prod(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"])
+    df = df.copy()
+    for c in ["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"]:
+        if c not in df.columns:
+            df[c] = "" if c == "商品名稱" else 0
+    df["選取"] = df["選取"].astype(bool)
+    df["商品名稱"] = df["商品名稱"].astype(str)
+    for c in ["長", "寬", "高", "重量(kg)"]:
+        df[c] = df[c].apply(lambda x: _to_float(x, 0.0))
+    df["數量"] = df["數量"].apply(lambda x: int(_to_float(x, 0)))
+    return df[["選取", "商品名稱", "長", "寬", "高", "重量(kg)", "數量"]]
+
+def _build_bins(df_box: pd.DataFrame) -> List[Dict[str, Any]]:
+    df_box = _sanitize_box(df_box)
+    bins: List[Dict[str, Any]] = []
+    for _, r in df_box.iterrows():
+        if not bool(r["選取"]):
+            continue
+        qty = int(r["數量"])
+        L, W, H = float(r["長"]), float(r["寬"]), float(r["高"])
+        if qty <= 0 or L <= 0 or W <= 0 or H <= 0:
+            continue
+        name = str(r["名稱"]).strip() or "外箱"
+        tare = float(r["空箱重量"])
+        for _i in range(qty):
+            bins.append({"name": name, "l": L, "w": W, "h": H, "tare": tare})
+    return bins
+
+def _build_items(df_prod: pd.DataFrame) -> List[Item]:
+    df_prod = _sanitize_prod(df_prod)
+    items: List[Item] = []
+    for _, r in df_prod.iterrows():
+        if not bool(r["選取"]):
+            continue
+        qty = int(r["數量"])
+        L, W, H = float(r["長"]), float(r["寬"]), float(r["高"])
+        wt = float(r["重量(kg)"])
+        if qty <= 0 or L <= 0 or W <= 0 or H <= 0:
+            continue
+        base = str(r["商品名稱"]).strip() or "商品"
+        for i in range(qty):
+            items.append(Item(f"{base}_{i+1}", L, W, H, wt))
+    return items
+
+def _loading_overlay_html() -> str:
+    # 給 A011/A012 用（避免 NameError）
+    return """
+    <div style="
+      position:absolute; inset:0;
+      background:rgba(255,255,255,0.75);
+      z-index:9999;
+      border-radius:12px;
+    "></div>
+    """
+
+def _force_rerun():
+    # 給 A011/A012 用（避免 NameError）
+    st.rerun()
+#------A000：常數 + 基礎工具（必須放在 A001 之前）(結束)：------
+
+
 #------A001：匯入套件(開始)：------
 import os, json, re
 import time
@@ -350,7 +468,7 @@ def _gas_cache_clear():
 
 
 
-#------A007：Action / 真防呆 Loading Overlay / Watchdog（完整可用版）(開始)：------
+#------A007：Action / 真防呆 Loading Overlay / Watchdog（唯一版本）(開始)：------
 import time
 import traceback
 import streamlit as st
@@ -358,10 +476,8 @@ import streamlit as st
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
-def _ensure_defaults():
+def _action_defaults_once():
     ss = st.session_state
-    ss.setdefault("layout_mode", "左右 50% / 50%")
-    ss.setdefault("order_name", f"訂單_{time.strftime('%Y%m%d')}")
     ss.setdefault("_action", None)         # {"type": "...", "payload": {...}}
     ss.setdefault("_loading", False)       # bool
     ss.setdefault("_loading_msg", "")      # str
@@ -382,9 +498,6 @@ def _set_loading(on: bool, msg: str = ""):
         st.session_state["_loading_since"] = _now_ms()
 
 def _render_loading_overlay():
-    """
-    ✅ 全頁遮罩（真的防呆）：啟動時鎖住操作，直到 action 完成才解除
-    """
     msg = st.session_state.get("_loading_msg") or "處理中，請稍候..."
     st.markdown(
         f"""
@@ -392,6 +505,7 @@ def _render_loading_overlay():
           position:fixed;inset:0;z-index:999999;
           background:rgba(255,255,255,0.85);
           display:flex;align-items:center;justify-content:center;
+          pointer-events:all;
         ">
           <div style="
             width:min(520px,92vw);
@@ -399,7 +513,7 @@ def _render_loading_overlay():
             padding:18px 18px;box-shadow:0 10px 30px rgba(0,0,0,0.08);
             font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans TC',sans-serif;
           ">
-            <div style="font-size:16px;font-weight:700;margin-bottom:8px;">⏳ 讀取中</div>
+            <div style="font-size:16px;font-weight:800;margin-bottom:8px;">⏳ 讀取中</div>
             <div style="font-size:14px;line-height:1.6;color:#333;">{msg}</div>
             <div style="margin-top:12px;font-size:12px;color:#777;">請不要關閉或重新整理頁面</div>
           </div>
@@ -409,9 +523,6 @@ def _render_loading_overlay():
     )
 
 def _loading_watchdog(timeout_sec: int = 60):
-    """
-    ✅ 避免 loading 卡死：超過 timeout 會自動解除並提示
-    """
     if not _is_loading():
         return
     since = int(st.session_state.get("_loading_since") or 0)
@@ -423,33 +534,24 @@ def _loading_watchdog(timeout_sec: int = 60):
         st.error("⚠️ 讀取逾時，已自動解除防呆。請再試一次或查看 logs。")
 
 def _trigger(action_type: str, msg: str = "處理中，請稍候...", payload: dict | None = None):
-    """
-    ✅ 按鈕當下：只做「掛 action + 開遮罩」，下一輪 rerun 才真的執行耗時計算
-    """
     st.session_state["_action"] = {"type": action_type, "payload": payload or {}}
     _set_loading(True, msg)
     st.rerun()
 
 def _handle_action(handlers: dict):
-    """
-    ✅ 在下一輪執行 action，成功/失敗都會解除遮罩
-    handlers 例：{"RUN_3D": fn, "SAVE_BOX": fn2}
-    """
     if not _has_action():
         return
 
     a = st.session_state.get("_action") or {}
     t = a.get("type")
     payload = a.get("payload") or {}
-
-    # 先清掉 action，避免重入
     st.session_state["_action"] = None
 
     try:
         fn = handlers.get(t)
         if fn is None:
             raise RuntimeError(f"Unknown action: {t}")
-        fn(payload)  # 真正做事（可耗時）
+        fn(payload)
         _set_loading(False, "")
     except Exception as e:
         _set_loading(False, "")
@@ -459,7 +561,7 @@ def _handle_action(handlers: dict):
 def _bump_render_nonce():
     st.session_state["_render_nonce"] = int(st.session_state.get("_render_nonce", 0)) + 1
     return st.session_state["_render_nonce"]
-#------A007：Action / 真防呆 Loading Overlay / Watchdog（完整可用版）(結束)：------
+#------A007：Action / 真防呆 Loading Overlay / Watchdog（唯一版本）(結束)：------
 
 
 
@@ -866,96 +968,12 @@ def prod_table_block():
 
 
 
-#------A013：模板區塊 template_block（修正 NameError/恢復模板讀取/真更新）(開始)：------
-import streamlit as st
+#------A013：模板區塊 template_block（修正：避免重複定義造成覆蓋）(開始)：------
+# ✅ 重要：此檔案只保留 A010 的 template_block() 作為唯一版本
+# ✅ A013 不再重複定義 template_block，避免覆蓋 A010 造成 NameError
 
-def template_block(title: str, sheet: str, active_key: str, df_key: str,
-                   build_payload_fn, apply_payload_fn, tpl_key_prefix: str):
-    """
-    你原本 main() 裡呼叫的 template_block(...) 用這版取代。
-    - build_payload_fn(): 由目前資料組成要存的 payload(dict)
-    - apply_payload_fn(payload): 把讀到的 payload 套用回 session_state / df
-    """
-
-    st.markdown(f"### {title}")
-
-    gas = _get_gas_client()
-    if not gas:
-        st.warning("⚠ 模板功能未啟用：讀不到 GAS_URL（Secrets 仍維持你原本的 key，不會被我改）。")
-        return
-
-    colL, colR = st.columns(2)
-
-    # 左：選擇模板 + 載入
-    with colL:
-        names = ["(無)"] + _cache_gas_list(sheet)
-        cur = st.session_state.get(active_key, "(無)")
-        if cur not in names:
-            cur = "(無)"
-
-        sel = st.selectbox(
-            "選擇模板",
-            options=names,
-            index=names.index(cur) if cur in names else 0,
-            key=f"{tpl_key_prefix}_sel",
-        )
-
-        if st.button("⬇️ 載入模板", use_container_width=True, key=f"{tpl_key_prefix}_btn_load"):
-            if sel == "(無)":
-                st.info("請先選擇要載入的模板。")
-            else:
-                payload = _cache_gas_read(sheet, sel)
-                if not payload:
-                    st.error("讀取失敗或模板內容為空。")
-                else:
-                    try:
-                        apply_payload_fn(payload)
-                        st.session_state[active_key] = sel
-                        st.success(f"已載入：{sel}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"套用模板失敗：{e}")
-
-    # 右：刪除模板
-    with colR:
-        del_names = ["(無)"] + _cache_gas_list(sheet)
-        del_sel = st.selectbox(
-            "要刪除的模板",
-            options=del_names,
-            key=f"{tpl_key_prefix}_del_sel",
-        )
-        if st.button("🗑️ 刪除模板", use_container_width=True, key=f"{tpl_key_prefix}_btn_del"):
-            if del_sel == "(無)":
-                st.info("請先選擇要刪除的模板。")
-            else:
-                ok, msg = _gas_delete(sheet, del_sel)
-                if ok:
-                    if st.session_state.get(active_key) == del_sel:
-                        st.session_state[active_key] = "(無)"
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-
-    # 另存新模板名稱 + 儲存
-    save_name = st.text_input("另存為模板名稱", key=f"{tpl_key_prefix}_save_name", placeholder="例如：常用A")
-    if st.button("💾 儲存模板", use_container_width=True, key=f"{tpl_key_prefix}_btn_save"):
-        name = (save_name or "").strip()
-        if not name:
-            st.info("請輸入要儲存的模板名稱。")
-        else:
-            try:
-                payload = build_payload_fn()
-                ok, msg = _gas_write(sheet, name, payload)
-                if ok:
-                    st.session_state[active_key] = name
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-            except Exception as e:
-                st.error(f"組合資料失敗：{e}")
-#------A013：模板區塊 template_block（修正 NameError/恢復模板讀取/真更新）(結束)：------
+#（保留空段即可）
+#------A013：模板區塊 template_block（修正：避免重複定義造成覆蓋）(結束)：------
 
 
 
