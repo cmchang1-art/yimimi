@@ -51,6 +51,11 @@ div[data-testid="stDownloadButton"] > button{
   margin: 2rem 0px 0rem;    /*外圍間距*/
   background: #d2efec;      /*按鈕底色*/
 }
+/* hover 效果 */
+div[data-testid="stDownloadButton"] > button:hover{
+  /* transform: translateY(-1px); */
+  filter: brightness(1.05);
+}
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
 .st-key-run_pack_container div[data-testid="stButton"] button{
