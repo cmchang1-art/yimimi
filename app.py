@@ -49,6 +49,9 @@ div[data-testid="stDownloadButton"] > button{
   border-radius: 12px;      /* 圓角 */
   font-weight: 800;
   margin: 2rem 0px 0rem;    /*外圍間距*/
+  background: #1967d2;      /*按鈕底色*/
+}
+div[data-testid="stDownloadButton"] button:hover{
   background: #e8f0fe;      /*按鈕底色*/
 }
 
