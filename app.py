@@ -1106,38 +1106,25 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     loading = _is_loading()
-  
-# 只包住「🚀 開始計算與 3D 模擬」按鈕：方便 CSS 精準套用
-st.markdown('<div class="run-pack-btn">', unsafe_allow_html=True)
 
-clicked = st.button(
-    '🚀 開始計算與 3D 模擬',
-    use_container_width=True,
-    key='run_pack',
-    disabled=loading
-)
+    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+        _begin_loading('計算與 3D 模擬中...')
+        try:
+            df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
+            df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
 
-st.markdown('</div>', unsafe_allow_html=True)
+            st.session_state.df_box  = _sanitize_box(df_box_src)
+            st.session_state.df_prod = _sanitize_prod(df_prod_src)
 
-if clicked:
-    _begin_loading('計算與 3D 模擬中...')
-    try:
-        df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
-        df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
-
-        st.session_state.df_box  = _sanitize_box(df_box_src)
-        st.session_state.df_prod = _sanitize_prod(df_prod_src)
-
-        with st.spinner('計算中...'):
-            st.session_state.last_result = pack_and_render(
-                st.session_state.order_name,
-                st.session_state.df_box,
-                st.session_state.df_prod
-            )
-        _force_rerun()
-    finally:
-        _end_loading()
-
+            with st.spinner('計算中...'):
+                st.session_state.last_result = pack_and_render(
+                    st.session_state.order_name,
+                    st.session_state.df_box,
+                    st.session_state.df_prod
+                )
+            _force_rerun()
+        finally:
+            _end_loading()
 
     res = st.session_state.get('last_result')
     if not res:
@@ -1164,7 +1151,7 @@ if clicked:
 
     # ===== 報告摘要 =====
     st.markdown("### 🧾 訂單裝箱報告")
- 
+    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
 
     used_bin_count = int(res.get('used_bin_count', 0))
     st.markdown(
@@ -1191,7 +1178,7 @@ if clicked:
         for k, v in counts.items():
             st.error(f"{k}：超過 {v} 個")
 
-
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # ===== 下載完整報告 =====
     ts = _now_tw().strftime('%Y%m%d_%H%M')
