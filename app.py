@@ -780,28 +780,20 @@ def prod_table_block():
 
 
 #------A013：外箱選擇/商品展開為 Item(開始)：------
+from decimal import Decimal
+
+def _D(x)->Decimal:
+    # 用字串避免 float 二進位誤差
+    return Decimal(str(_to_float(x, 0)))
+
 class FixedItem(Item):
     """
-    鎖定尺寸方向：回傳的 dimension 型別要與 py3dbp 內部一致（通常是 Decimal），
-    否則會出現 Decimal + float 的 TypeError（混用「自動」與「手動」時特別容易發生）。
+    鎖定方向 + 統一回傳 Decimal 尺寸，避免 Decimal/float 混用造成 TypeError。
     """
-    def __init__(self, name: str, dx: float, dy: float, dz: float, weight: float):
+    def __init__(self, name: str, dx, dy, dz, weight: float):
+        # dx/dy/dz 直接用 Decimal
         super().__init__(name, dx, dy, dz, weight)
-
-        # ✅ py3dbp 內部通常用 Decimal；用 width 的型別當作基準做轉型
-        T = type(self.width)
-
-        def cast(v):
-            # Decimal(str(v)) / float(str(v)) 都能安全處理
-            try:
-                return T(str(v))
-            except Exception:
-                try:
-                    return T(v)
-                except Exception:
-                    return v
-
-        self._fixed_dims = (cast(dx), cast(dy), cast(dz))
+        self._fixed_dims = (Decimal(str(dx)), Decimal(str(dy)), Decimal(str(dz)))
 
     def get_dimension(self):
         return self._fixed_dims
@@ -814,31 +806,30 @@ def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
         qty=int(r.get('數量',0) or 0)
         if qty<=0:
             continue
-        L=float(r.get('長',0) or 0)
-        W=float(r.get('寬',0) or 0)
-        H=float(r.get('高',0) or 0)
+
+        L=_D(r.get('長',0)); W=_D(r.get('寬',0)); H=_D(r.get('高',0))
         if L<=0 or W<=0 or H<=0:
             continue
+
         name=(str(r.get('名稱','') or '').strip() or '外箱')
-        tare=float(r.get('空箱重量',0) or 0)
+        tare=_to_float(r.get('空箱重量',0) or 0)  # 重量維持 float 無妨
         for i in range(qty):
             bins.append({'name':name,'l':L,'w':W,'h':H,'tare':tare})
     return bins
 
-def _apply_manual_orient(L: float, W: float, H: float, mode: str):
+def _apply_manual_orient(L: Decimal, W: Decimal, H: Decimal, mode: str):
     """
     座標系：x=長(L), y=寬(W), z=高(H)
     指定「哪個尺寸當 z(高度)」。
     """
     mode = (mode or '自動').strip()
-
     if mode == '高當高':
-        return (L, W, H)          # z=H
+        return (L, W, H)   # z=H
     if mode == '長當高':
-        return (W, H, L)          # z=L
+        return (W, H, L)   # z=L
     if mode == '寬當高':
-        return (L, H, W)          # z=W
-    return (L, W, H)              # 自動：交給 py3dbp 旋轉
+        return (L, H, W)   # z=W
+    return (L, W, H)       # 自動：交給 py3dbp 旋轉
 
 def _build_items(df_prod:pd.DataFrame)->List[Item]:
     items=[]
@@ -848,22 +839,23 @@ def _build_items(df_prod:pd.DataFrame)->List[Item]:
         qty=int(r.get('數量',0) or 0)
         if qty<=0:
             continue
-        L=float(r.get('長',0) or 0)
-        W=float(r.get('寬',0) or 0)
-        H=float(r.get('高',0) or 0)
+
+        L=_D(r.get('長',0)); W=_D(r.get('寬',0)); H=_D(r.get('高',0))
         if L<=0 or W<=0 or H<=0:
             continue
 
         nm=(str(r.get('商品名稱','') or '').strip() or '商品')
-        wt=float(r.get('重量(kg)',0) or 0)
+        wt=_to_float(r.get('重量(kg)',0) or 0)
         orient=str(r.get('放置方式','自動') or '自動').strip()
 
         for i in range(qty):
             dx, dy, dz = _apply_manual_orient(L, W, H, orient)
 
             if orient == '自動':
+                # ✅ 自動：Item 尺寸也用 Decimal（重點）
                 items.append(Item(f"{nm}_{i+1}", dx, dy, dz, wt))
             else:
+                # ✅ 手動：FixedItem 鎖定方向（也用 Decimal）
                 items.append(FixedItem(f"{nm}_{i+1}", dx, dy, dz, wt))
     return items
 #------A013：外箱選擇/商品展開為 Item(結束)：------
@@ -1076,7 +1068,7 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
         if not bool(r.get('選取', False)): 
             continue
         qty=int(r.get('數量',0) or 0)
-        L=float(r.get('長',0) or 0); W=float(r.get('寬',0) or 0); H=float(r.get('高',0) or 0)
+        L=_to_float(r.get('長',0) or 0); W=_to_float(r.get('寬',0) or 0); H=_to_float(r.get('高',0) or 0)
         if qty<=0 or L<=0 or W<=0 or H<=0:
             continue
         base_order.append(str(r.get('商品名稱','') or '商品').strip() or '商品')
@@ -1088,7 +1080,9 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
             color_map[bname]=palette[ci%len(palette)]
             ci += 1
 
-    def _vol(b): return float(b['l']*b['w']*b['h'])
+    def _vol(b):
+        # bins 的 l/w/h 已是 Decimal，這裡轉 float 供排序用
+        return float(b['l']*b['w']*b['h'])
     bins_sorted=sorted(bins, key=_vol, reverse=True)
 
     def _rot_dim(it:Item):
@@ -1105,14 +1099,15 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
             break
 
         packer=Packer()
-        packer.add_bin(Bin(f"{b['name']}#{i}", float(b['l']), float(b['w']), float(b['h']), 999999))
+
+        # ✅ 重要：不要再 float()，直接用 Decimal 尺寸建立 Bin
+        packer.add_bin(Bin(f"{b['name']}#{i}", b['l'], b['w'], b['h'], 999999))
+
         for it in remaining:
             packer.add_item(it)
 
-        try:
-            packer.pack(bigger_first=True, distribute_items=False)
-        except TypeError:
-            packer.pack()
+        # 這裡不用 try/except 了（型別統一後不需要）
+        packer.pack(bigger_first=True, distribute_items=False)
 
         bb=packer.bins[0]
         fitted=list(getattr(bb,'items',[]) or [])
@@ -1135,13 +1130,11 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
     util=(used_item_vol/used_box_vol*100.0) if used_box_vol>0 else 0.0
     util=max(0.0, min(100.0, util))
 
-    # 預設 3D：第一箱（但 UI 會顯示多箱）
     if packed:
         fig=build_3d_fig(packed[0]['box'], packed[0]['items'], color_map=color_map)
     else:
         fig=go.Figure()
 
-    # 給 UI 用（下拉/多圖）
     class _MiniBin:
         def __init__(self, name, items):
             self.name=name
@@ -1150,12 +1143,11 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
     packer_bins=[_MiniBin(p['name'], p['items']) for p in packed]
     bins_input=[p['box'] for p in packed]
 
-    # 先回傳，HTML 由 A018 呼叫 A015 生成（確保與畫面一致）
     return {
         'ok':True,
         'bins_input': bins_input,
         'packer_bins': packer_bins,
-        'packed_bins': packed,       # ✅ 每箱使用/件數/內容
+        'packed_bins': packed,
         'used_bin_count': len(packed),
         'unfitted': unfitted,
         'content_wt': content_wt,
@@ -1163,7 +1155,7 @@ def pack_and_render(order_name:str, df_box:pd.DataFrame, df_prod:pd.DataFrame)->
         'util': util,
         'fig': fig,
         'color_map': color_map,
-        'report_html': ''            # ✅ 由 A018 生成（避免與畫面不一致）
+        'report_html': ''
     }
 #------A016：裝箱計算核心（py3dbp）+ 統計(結束)：------
 
