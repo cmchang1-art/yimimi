@@ -1107,9 +1107,9 @@ def result_block():
 
     loading = _is_loading()
     if st.markdown('<div class="run-pack-btn">', unsafe_allow_html=True)
-  st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
-        _begin_loading('計算與 3D 模擬中...')
-  st.markdown('</div>', unsafe_allow_html=True)
+            st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+            _begin_loading('計算與 3D 模擬中...')
+       st.markdown('</div>', unsafe_allow_html=True)
         try:
             df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
             df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
