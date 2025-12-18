@@ -45,14 +45,11 @@ st.markdown('''<style>
 /* ===== Download button 外觀（全域套用）===== */
 div[data-testid="stDownloadButton"] > button{
   font-size: 16px;          /* 字體大小 */
-  /*padding: 10px 14px;        內距：讓按鈕更大顆好按 */
+  padding: 14px 16px;       /* 內距：讓按鈕更大顆好按 */
   border-radius: 12px;      /* 圓角 */
   font-weight: 800;
   margin: 2rem 0px 0rem;    /*外圍間距*/
-  background: #1967d2;      /*按鈕底色*/
-}
-div[data-testid="stDownloadButton"] button:hover{
-  background: #e8f0fe;      /*按鈕底色*/
+  background: #d2efec;      /*按鈕底色*/
 }
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
