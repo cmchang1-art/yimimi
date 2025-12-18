@@ -51,11 +51,12 @@ div[data-testid="stDownloadButton"] > button{
   margin: 2rem 0px 0rem;    /*外圍間距*/
   background: #bdd4f9;      /*按鈕底色*/
 }
-/* ===== 🚀 開始計算與 3D 模擬 按鈕樣式 ===== */
+
+/* ===== 全區按鈕樣式 ===== */
 div[data-testid="stButton"] button[kind="secondary"]{
   font-size: 18px;          /* 字體大小 */
   font-weight: 800;
-  padding: 14px 16px;       /* 讓按鈕更大顆 */
+  padding: 10px 14px;       /* 讓按鈕更大顆 */
   border-radius: 12px;      /* 圓角 */
   background: #eaebf9;      /*按鈕底色*/
 }
@@ -71,6 +72,28 @@ div[data-testid="stButton"] button:disabled{
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
+div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]{
+  font-size: 18px;          /* 字體大小 */
+  font-weight: 800;
+  padding: 14px 16px;       /* 讓按鈕更大顆 */
+  border-radius: 12px;      /* 圓角 */
+  background: #eaebf9;      /*按鈕底色*/
+}
+
+/* hover 效果 */
+div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]:hover{
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+/* disabled 狀態（計算中） */
+div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]:disabled{
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 </style>''', unsafe_allow_html=True)
 #------A002：Streamlit頁面設定與全域CSS(結束)：------
 
