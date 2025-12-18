@@ -1106,7 +1106,7 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     loading = _is_loading()
-if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
         _begin_loading('計算與 3D 模擬中...')
         try:
             df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
