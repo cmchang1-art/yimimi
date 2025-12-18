@@ -1107,7 +1107,13 @@ def result_block():
 
     loading = _is_loading()
 
-    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+    # ✅ 只新增：包住「開始計算」按鈕，讓 CSS 只影響這顆
+    st.markdown('<div class="run-pack-btn">', unsafe_allow_html=True)
+    clicked = st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ✅ 原本 if st.button(...) 的內容完全不變，只是改成 if clicked:
+    if clicked:
         _begin_loading('計算與 3D 模擬中...')
         try:
             df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
