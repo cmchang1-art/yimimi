@@ -52,7 +52,7 @@ div[data-testid="stDownloadButton"] button{
   background: #d2efec;      /*按鈕底色*/
 }
 /* hover 效果 */
-div[data-testid="stDownloadButton"] button:hover{
+div[data-testid="stDownloadButton"] > button:hover{
   filter: brightness(1.05) !important;
 }
 
