@@ -1107,7 +1107,19 @@ def result_block():
 
     loading = _is_loading()
   
-if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+# 只包住「🚀 開始計算與 3D 模擬」按鈕：方便 CSS 精準套用
+st.markdown('<div class="run-pack-btn">', unsafe_allow_html=True)
+
+clicked = st.button(
+    '🚀 開始計算與 3D 模擬',
+    use_container_width=True,
+    key='run_pack',
+    disabled=loading
+)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+if clicked:
     _begin_loading('計算與 3D 模擬中...')
     try:
         df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
@@ -1125,6 +1137,7 @@ if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='ru
         _force_rerun()
     finally:
         _end_loading()
+
 
     res = st.session_state.get('last_result')
     if not res:
