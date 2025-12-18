@@ -53,7 +53,7 @@ div[data-testid="stDownloadButton"] > button{
 }
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
-.run-pack-btn div[data-testid="stButton"] button{
+.st-key-run_pack_container div[data-testid="stButton"] button{
   font-size: 18px;          /* 字體大小 */
   font-weight: 800;
   padding: 14px 16px;       /* 讓按鈕更大顆 */
@@ -62,13 +62,13 @@ div[data-testid="stDownloadButton"] > button{
 }
 
 /* hover 效果 */
-.run-pack-btn div[data-testid="stButton"] button:hover{
+.st-key-run_pack_container div[data-testid="stButton"] button:hover{
   transform: translateY(-1px);
   filter: brightness(1.05);
 }
 
 /* disabled 狀態（計算中） */
-.run-pack-btn div[data-testid="stButton"] button:disabled{
+.st-key-run_pack_container div[data-testid="stButton"] button:disabled{
   opacity: 0.55;
   cursor: not-allowed;
 }
