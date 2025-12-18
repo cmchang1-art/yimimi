@@ -45,11 +45,31 @@ st.markdown('''<style>
 /* ===== Download button 外觀（全域套用）===== */
 div[data-testid="stDownloadButton"] > button{
   font-size: 16px;          /* 字體大小 */
-  padding: 10px 14px;       /* 內距：讓按鈕更大顆好按 */
+  /*padding: 10px 14px;        內距：讓按鈕更大顆好按 */
   border-radius: 14px;      /* 圓角 */
   font-weight: 800;
   margin: 2rem 0px 0rem;    /*外圍間距*/
   background: #bdd4f9;      /*按鈕底色*/
+}
+/* ===== 🚀 開始計算與 3D 模擬 按鈕樣式 ===== */
+div[data-testid="stButton"] button[kind="secondary"]{
+  font-size: 18px;          /* 字體大小 */
+  font-weight: 800;
+  /*padding: 10px 14px;        讓按鈕更大顆 */
+  border-radius: 14px;      /* 圓角 */
+  background: #bdd4f9;      /*按鈕底色*/
+}
+
+/* hover 狀態 */
+div[data-testid="stButton"] button[kind="secondary"]:hover{
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+/* disabled 狀態（計算中） */
+div[data-testid="stButton"] button:disabled{
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 </style>''', unsafe_allow_html=True)
 #------A002：Streamlit頁面設定與全域CSS(結束)：------
