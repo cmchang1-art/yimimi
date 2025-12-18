@@ -49,7 +49,7 @@ div[data-testid="stDownloadButton"] > button{
   border-radius: 12px;      /* 圓角 */
   font-weight: 800;
   margin: 2rem 0px 0rem;    /*外圍間距*/
-  background: #bdd4f9;      /*按鈕底色*/
+  background: #e8f0fe;      /*按鈕底色*/
 }
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
@@ -58,7 +58,7 @@ div[data-testid="stDownloadButton"] > button{
   font-weight: 800;
   padding: 14px 16px;       /* 讓按鈕更大顆 */
   border-radius: 12px;      /* 圓角 */
-  background: #00b900;      /*按鈕底色*/
+  background: #e8f0fe;      /*按鈕底色*/
 }
 
 /* hover 效果 */
