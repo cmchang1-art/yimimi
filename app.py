@@ -53,7 +53,7 @@ div[data-testid="stDownloadButton"] button{
 }
 /* hover 效果 */
 div[data-testid="stDownloadButton"] button:hover{
-  filter: brightness(1.05);
+  filter: brightness(1.05) !important;
 }
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
