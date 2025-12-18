@@ -53,7 +53,7 @@ div[data-testid="stDownloadButton"] > button{
 }
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
-div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]{
+.run-pack-btn div[data-testid="stButton"] button{
   font-size: 18px;          /* 字體大小 */
   font-weight: 800;
   padding: 14px 16px;       /* 讓按鈕更大顆 */
@@ -62,13 +62,13 @@ div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]{
 }
 
 /* hover 效果 */
-div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]:hover{
+.run-pack-btn div[data-testid="stButton"] button:hover{
   transform: translateY(-1px);
   filter: brightness(1.05);
 }
 
 /* disabled 狀態（計算中） */
-div[data-testid="stButton"] button[aria-label="🚀 開始計算與 3D 模擬"]:disabled{
+.run-pack-btn div[data-testid="stButton"] button:disabled{
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -1106,8 +1106,9 @@ def result_block():
     st.markdown('## 3. 裝箱結果與模擬')
 
     loading = _is_loading()
-
-    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+st.markdown('<div class="run-pack-btn">', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
         _begin_loading('計算與 3D 模擬中...')
         try:
             df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
