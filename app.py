@@ -41,6 +41,14 @@ st.markdown('''<style>
   font-weight:800;
 }
 .loading-sub{font-weight:500;color:#555;font-size:13px;margin-top:4px}
+
+/* ===== Download button 外觀（全域套用）===== */
+div[data-testid="stDownloadButton"] > button{
+  font-size: 16px;          /* 字體大小 */
+  padding: 12px 16px;       /* 內距：讓按鈕更大顆好按 */
+  border-radius: 14px;      /* 圓角 */
+  font-weight: 800;
+}
 </style>''', unsafe_allow_html=True)
 #------A002：Streamlit頁面設定與全域CSS(結束)：------
 
