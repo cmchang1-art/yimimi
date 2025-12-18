@@ -52,7 +52,7 @@ div[data-testid="stDownloadButton"] button{
   background: #d2efec;      /*按鈕底色*/
 }
 /* hover 效果 */
-div[data-testid="stDownloadButton"] > button:hover{
+div[data-testid="stDownloadButton"] button:hover{
   filter: brightness(1.05) !important;
 }
 
@@ -1168,7 +1168,6 @@ def result_block():
 
     # ===== 報告摘要 =====
     st.markdown("### 🧾 訂單裝箱報告")
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
 
     used_bin_count = int(res.get('used_bin_count', 0))
     st.markdown(
@@ -1195,7 +1194,6 @@ def result_block():
         for k, v in counts.items():
             st.error(f"{k}：超過 {v} 個")
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # ===== 下載完整報告 =====
     ts = _now_tw().strftime('%Y%m%d_%H%M')
