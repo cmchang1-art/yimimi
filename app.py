@@ -1107,12 +1107,16 @@ def result_block():
 
     loading = _is_loading()
 
-    # ✅ 只新增：包住「開始計算」按鈕，讓 CSS 只影響這顆
-    st.markdown('<div class="run-pack-btn">', unsafe_allow_html=True)
-    clicked = st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # ✅ 只調整這裡：用 container(key) 包住「開始計算」按鈕
+    with st.container(key="run_pack_container"):
+        clicked = st.button(
+            '🚀 開始計算與 3D 模擬',
+            use_container_width=True,
+            key='run_pack',
+            disabled=loading
+        )
 
-    # ✅ 原本 if st.button(...) 的內容完全不變，只是改成 if clicked:
+    # ✅ 原本 if st.button(...) 的邏輯完全不變
     if clicked:
         _begin_loading('計算與 3D 模擬中...')
         try:
