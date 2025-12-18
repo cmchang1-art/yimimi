@@ -55,7 +55,7 @@ div[data-testid="stDownloadButton"] > button{
 div[data-testid="stButton"] button[kind="secondary"]{
   font-size: 18px;          /* 字體大小 */
   font-weight: 800;
-  /*padding: 10px 14px;        讓按鈕更大顆 */
+  padding: 14px 16px;       /* 讓按鈕更大顆 */
   border-radius: 12px;      /* 圓角 */
   background: #eaebf9;      /*按鈕底色*/
 }
