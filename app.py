@@ -782,12 +782,26 @@ def prod_table_block():
 #------A013：外箱選擇/商品展開為 Item(開始)：------
 class FixedItem(Item):
     """
-    鎖定尺寸方向：即使 py3dbp 嘗試旋轉(rotation_type 改變)，
-    get_dimension() 仍固定回傳你指定的 (dx,dy,dz)，讓「放置方式」真正生效。
+    鎖定尺寸方向：回傳的 dimension 型別要與 py3dbp 內部一致（通常是 Decimal），
+    否則會出現 Decimal + float 的 TypeError（混用「自動」與「手動」時特別容易發生）。
     """
     def __init__(self, name: str, dx: float, dy: float, dz: float, weight: float):
         super().__init__(name, dx, dy, dz, weight)
-        self._fixed_dims = (float(dx), float(dy), float(dz))
+
+        # ✅ py3dbp 內部通常用 Decimal；用 width 的型別當作基準做轉型
+        T = type(self.width)
+
+        def cast(v):
+            # Decimal(str(v)) / float(str(v)) 都能安全處理
+            try:
+                return T(str(v))
+            except Exception:
+                try:
+                    return T(v)
+                except Exception:
+                    return v
+
+        self._fixed_dims = (cast(dx), cast(dy), cast(dz))
 
     def get_dimension(self):
         return self._fixed_dims
@@ -813,19 +827,18 @@ def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
 
 def _apply_manual_orient(L: float, W: float, H: float, mode: str):
     """
-    我們的 3D 座標系採用：x=長(L), y=寬(W), z=高(H)
-    這裡的目標是「指定哪個尺寸要當 z(高度)」。
-    回傳 (dx, dy, dz) 給 Item / FixedItem 使用。
+    座標系：x=長(L), y=寬(W), z=高(H)
+    指定「哪個尺寸當 z(高度)」。
     """
     mode = (mode or '自動').strip()
 
     if mode == '高當高':
         return (L, W, H)          # z=H
     if mode == '長當高':
-        return (W, H, L)          # z=L（其餘兩邊放到 x,y）
+        return (W, H, L)          # z=L
     if mode == '寬當高':
         return (L, H, W)          # z=W
-    return (L, W, H)              # 自動：保持原尺寸（允許 py3dbp 自己旋轉）
+    return (L, W, H)              # 自動：交給 py3dbp 旋轉
 
 def _build_items(df_prod:pd.DataFrame)->List[Item]:
     items=[]
@@ -848,11 +861,9 @@ def _build_items(df_prod:pd.DataFrame)->List[Item]:
         for i in range(qty):
             dx, dy, dz = _apply_manual_orient(L, W, H, orient)
 
-            # ✅ 自動：正常 Item（允許旋轉）
             if orient == '自動':
                 items.append(Item(f"{nm}_{i+1}", dx, dy, dz, wt))
             else:
-                # ✅ 手動指定：用 FixedItem 鎖定方向（不允許旋轉）
                 items.append(FixedItem(f"{nm}_{i+1}", dx, dy, dz, wt))
     return items
 #------A013：外箱選擇/商品展開為 Item(結束)：------
