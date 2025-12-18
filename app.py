@@ -1107,24 +1107,24 @@ def result_block():
 
     loading = _is_loading()
   
-    if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
-        _begin_loading('計算與 3D 模擬中...')
-        try:
-            df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
-            df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
+if st.button('🚀 開始計算與 3D 模擬', use_container_width=True, key='run_pack', disabled=loading):
+    _begin_loading('計算與 3D 模擬中...')
+    try:
+        df_box_src  = st.session_state.get('_box_live_df',  st.session_state.df_box)
+        df_prod_src = st.session_state.get('_prod_live_df', st.session_state.df_prod)
 
-            st.session_state.df_box  = _sanitize_box(df_box_src)
-            st.session_state.df_prod = _sanitize_prod(df_prod_src)
+        st.session_state.df_box  = _sanitize_box(df_box_src)
+        st.session_state.df_prod = _sanitize_prod(df_prod_src)
 
-            with st.spinner('計算中...'):
-                st.session_state.last_result = pack_and_render(
-                    st.session_state.order_name,
-                    st.session_state.df_box,
-                    st.session_state.df_prod
-                )
-            _force_rerun()
-        finally:
-            _end_loading()
+        with st.spinner('計算中...'):
+            st.session_state.last_result = pack_and_render(
+                st.session_state.order_name,
+                st.session_state.df_box,
+                st.session_state.df_prod
+            )
+        _force_rerun()
+    finally:
+        _end_loading()
 
     res = st.session_state.get('last_result')
     if not res:
