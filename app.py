@@ -48,6 +48,7 @@ div[data-testid="stDownloadButton"] > button{
   padding: 12px 16px;       /* 內距：讓按鈕更大顆好按 */
   border-radius: 14px;      /* 圓角 */
   font-weight: 800;
+  margin: 2rem 0px 0rem;
 }
 </style>''', unsafe_allow_html=True)
 #------A002：Streamlit頁面設定與全域CSS(結束)：------
