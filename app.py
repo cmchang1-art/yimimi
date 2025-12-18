@@ -43,7 +43,7 @@ st.markdown('''<style>
 .loading-sub{font-weight:500;color:#555;font-size:13px;margin-top:4px}
 
 /* ===== Download button 外觀（全域套用）===== */
-div[data-testid="stDownloadButton"] > button{
+div[data-testid="stDownloadButton"] button{
   font-size: 16px;          /* 字體大小 */
   padding: 14px 16px;       /* 內距：讓按鈕更大顆好按 */
   border-radius: 12px;      /* 圓角 */
@@ -53,7 +53,6 @@ div[data-testid="stDownloadButton"] > button{
 }
 /* hover 效果 */
 div[data-testid="stDownloadButton"] button:hover{
-  /* transform: translateY(-1px); */
   filter: brightness(1.05);
 }
 
