@@ -297,7 +297,14 @@ def _ensure_defaults():
         ])
     if 'df_prod' not in st.session_state:
         st.session_state.df_prod=pd.DataFrame([
-            {'選取':True,'商品名稱':'禮盒(米餅)','長':21.0,'寬':14.0,'高':8.5,'重量(kg)':0.50,'數量':5}
+            {
+                '選取':True,
+                '商品名稱':'禮盒(米餅)',
+                '長':21.0,'寬':14.0,'高':8.5,
+                '重量(kg)':0.50,
+                '數量':5,
+                '放置方式':'自動'
+            }
         ])
     if 'active_box_tpl' not in st.session_state: 
         st.session_state.active_box_tpl=''
@@ -345,13 +352,13 @@ def _sanitize_box(df:pd.DataFrame)->pd.DataFrame:
 
 #------A008：商品資料清理/防呆(開始)：------
 def _sanitize_prod(df:pd.DataFrame)->pd.DataFrame:
-    cols=['選取','商品名稱','長','寬','高','重量(kg)','數量']
+    cols=['選取','商品名稱','長','寬','高','重量(kg)','數量','放置方式']
     if df is None:
         df=pd.DataFrame(columns=cols)
     df=df.copy()
     for c in cols:
         if c not in df.columns:
-            df[c]='' if c=='商品名稱' else 0
+            df[c]='' if c in ('商品名稱',) else 0
     df=df[cols].fillna('')
 
     if df.empty:
@@ -359,9 +366,16 @@ def _sanitize_prod(df:pd.DataFrame)->pd.DataFrame:
 
     df['選取']=df['選取'].astype(bool)
     df['商品名稱']=df['商品名稱'].astype(str).str.strip()
+
     for c in ['長','寬','高','重量(kg)']:
         df[c]=df[c].apply(_to_float)
     df['數量']=df['數量'].apply(lambda x:int(_to_float(x,0)))
+
+    # 放置方式防呆
+    allowed = ['自動','長當高','寬當高','高當高']
+    df['放置方式'] = df['放置方式'].astype(str).str.strip()
+    df.loc[~df['放置方式'].isin(allowed), '放置方式'] = '自動'
+    df.loc[df['放置方式'].eq(''), '放置方式'] = '自動'
 
     def empty_row(r):
         return (not r['商品名稱']) and r['長']==0 and r['寬']==0 and r['高']==0 and r['數量']==0
@@ -422,7 +436,8 @@ def _prod_payload(df):
             'w':_to_float(r['寬']),
             'h':_to_float(r['高']),
             'wt':_to_float(r['重量(kg)']),
-            'qty':int(_to_float(r['數量'],0))
+            'qty':int(_to_float(r['數量'],0)),
+            'orient': str(r.get('放置方式','自動') or '自動').strip()
         })
     return {'rows':rows}
 
@@ -443,7 +458,8 @@ def _prod_from(payload):
             '寬':_to_float(r.get('w',0)),
             '高':_to_float(r.get('h',0)),
             '重量(kg)':_to_float(r.get('wt',0)),
-            '數量':int(_to_float(r.get('qty',0),0))
+            '數量':int(_to_float(r.get('qty',0),0)),
+            '放置方式':str(r.get('orient','自動') or '自動')
         })
     return _sanitize_prod(pd.DataFrame(out))
 #------A009：外箱/商品 模板 payload 轉換(結束)：------
@@ -663,7 +679,8 @@ def box_table_block():
 #------A012：商品表格 UI（Data Editor + 操作按鈕）(開始)：------
 def prod_table_block():
     st.markdown('### 商品表格（勾選=參與計算；勾選後可刪除）')
-    st.markdown('<div class="muted">只保留一個「選取」欄：要參與裝箱就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="muted">只保留一個「選取」欄：要參與計算就勾選；要刪除就勾選後按「刪除勾選」。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="muted"><b>放置方式</b>：用來手動指定「哪一個尺寸要當高度(高)」。選了之後，該商品就會被鎖定方向（不再允許旋轉）。</div>', unsafe_allow_html=True)
 
     loading = _is_loading()
     df = _sanitize_prod(st.session_state.df_prod)
@@ -689,7 +706,12 @@ def prod_table_block():
             '寬': st.column_config.NumberColumn('寬', step=0.1, format='%.2f'),
             '高': st.column_config.NumberColumn('高', step=0.1, format='%.2f'),
             '重量(kg)': st.column_config.NumberColumn('重量(kg)', step=0.01, format='%.2f'),
-            '數量': st.column_config.NumberColumn('數量', step=1)
+            '數量': st.column_config.NumberColumn('數量', step=1),
+            '放置方式': st.column_config.SelectboxColumn(
+                '放置方式',
+                options=['自動','長當高','寬當高','高當高'],
+                help='手動指定「高度」要用哪個尺寸。選了就會鎖定方向不旋轉。'
+            )
         }
     )
 
@@ -742,7 +764,7 @@ def prod_table_block():
     if clear_btn:
         _begin_loading('清除商品中...')
         try:
-            empty = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量'])
+            empty = pd.DataFrame(columns=['選取','商品名稱','長','寬','高','重量(kg)','數量','放置方式'])
             st.session_state.df_prod = empty
             st.session_state.active_prod_tpl = ''
             st.session_state['_prod_live_df'] = empty.copy()
@@ -758,6 +780,18 @@ def prod_table_block():
 
 
 #------A013：外箱選擇/商品展開為 Item(開始)：------
+class FixedItem(Item):
+    """
+    鎖定尺寸方向：即使 py3dbp 嘗試旋轉(rotation_type 改變)，
+    get_dimension() 仍固定回傳你指定的 (dx,dy,dz)，讓「放置方式」真正生效。
+    """
+    def __init__(self, name: str, dx: float, dy: float, dz: float, weight: float):
+        super().__init__(name, dx, dy, dz, weight)
+        self._fixed_dims = (float(dx), float(dy), float(dz))
+
+    def get_dimension(self):
+        return self._fixed_dims
+
 def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
     bins=[]
     for _,r in df_box.iterrows():
@@ -777,6 +811,22 @@ def _build_bins(df_box:pd.DataFrame)->List[Dict[str,Any]]:
             bins.append({'name':name,'l':L,'w':W,'h':H,'tare':tare})
     return bins
 
+def _apply_manual_orient(L: float, W: float, H: float, mode: str):
+    """
+    我們的 3D 座標系採用：x=長(L), y=寬(W), z=高(H)
+    這裡的目標是「指定哪個尺寸要當 z(高度)」。
+    回傳 (dx, dy, dz) 給 Item / FixedItem 使用。
+    """
+    mode = (mode or '自動').strip()
+
+    if mode == '高當高':
+        return (L, W, H)          # z=H
+    if mode == '長當高':
+        return (W, H, L)          # z=L（其餘兩邊放到 x,y）
+    if mode == '寬當高':
+        return (L, H, W)          # z=W
+    return (L, W, H)              # 自動：保持原尺寸（允許 py3dbp 自己旋轉）
+
 def _build_items(df_prod:pd.DataFrame)->List[Item]:
     items=[]
     for _,r in df_prod.iterrows():
@@ -790,10 +840,20 @@ def _build_items(df_prod:pd.DataFrame)->List[Item]:
         H=float(r.get('高',0) or 0)
         if L<=0 or W<=0 or H<=0:
             continue
+
         nm=(str(r.get('商品名稱','') or '').strip() or '商品')
         wt=float(r.get('重量(kg)',0) or 0)
+        orient=str(r.get('放置方式','自動') or '自動').strip()
+
         for i in range(qty):
-            items.append(Item(f"{nm}_{i+1}", L, W, H, wt))
+            dx, dy, dz = _apply_manual_orient(L, W, H, orient)
+
+            # ✅ 自動：正常 Item（允許旋轉）
+            if orient == '自動':
+                items.append(Item(f"{nm}_{i+1}", dx, dy, dz, wt))
+            else:
+                # ✅ 手動指定：用 FixedItem 鎖定方向（不允許旋轉）
+                items.append(FixedItem(f"{nm}_{i+1}", dx, dy, dz, wt))
     return items
 #------A013：外箱選擇/商品展開為 Item(結束)：------
 
