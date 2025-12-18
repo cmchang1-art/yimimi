@@ -54,12 +54,14 @@ div[data-testid="stDownloadButton"] > button{
 
 /* ===== 只針對「🚀 開始計算與 3D 模擬」按鈕 ===== */
 .st-key-run_pack_container div[data-testid="stButton"] button{
-  font-size: 21px !important;          /* 字體大小 */
-  font-weight: 800 !important;
   color: #FFFFFF !important;
   padding: 14px 16px;       /* 讓按鈕更大顆 */
   border-radius: 12px;      /* 圓角 */
   background: #1967d2;      /*按鈕底色*/
+}
+.st-key-run_pack div[data-testid="stButton"] button div{
+  font-size: 21px !important;          /* 字體大小 */
+  font-weight: 800 !important;
 }
 
 /* hover 效果 */
