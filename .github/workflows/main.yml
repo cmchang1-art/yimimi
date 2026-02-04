@@ -1,18 +1,25 @@
 name: 每日自動喚醒網站
 on:
   schedule:
-    # 這裡設定每 4 小時執行一次 (UTC 時間 0, 4, 8, 12, 16, 20)
     - cron: '0 */4 * * *'
-  workflow_dispatch: # 保留這個，讓你可以手動按按鈕測試
+  workflow_dispatch:
 
 jobs:
   wake_up:
     runs-on: ubuntu-latest
     steps:
-      - name: 模擬真人訪問網站
+      - name: 模擬真人訪問並檢查狀態
         run: |
-          # 使用 curl 存取網站，並加上 || true 確保不會因為找不到關鍵字而中斷失敗
-          curl -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-          https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/ | grep -q "Streamlit" || true
+          URL="https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/"
+          USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           
-          echo "喚醒指令已發送。請等待約 1-2 分鐘後重新整理網頁查看結果。"
+          echo "正在發送第一次喚醒請求..."
+          curl -s -L -A "$USER_AGENT" "$URL" > /dev/null
+          
+          echo "等待伺服器熱機 30 秒..."
+          sleep 30
+          
+          echo "發送第二次確認請求（模擬按鈕後的重新載入）..."
+          curl -s -L -A "$USER_AGENT" "$URL" > /dev/null
+          
+          echo "喚醒程序完成。請於 1 分鐘後手動重新整理你的瀏覽器頁面。"
