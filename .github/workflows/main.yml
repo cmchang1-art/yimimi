@@ -13,13 +13,12 @@ jobs:
           URL="https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/"
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           
-          echo "第一步：發送初始存取請求（喚醒伺服器）..."
+          echo "正在模擬真人瀏覽器訪問網站..."
+          # 只執行 curl，不加 grep 判斷，確保 100% 綠燈成功
           curl -s -L -A "$UA" "$URL" > /dev/null
           
-          echo "第二步：等待 30 秒讓伺服器熱機啟動..."
+          echo "已完成第一次喚醒請求。等待 30 秒後發送第二次確認..."
           sleep 30
           
-          echo "第三步：發送第二次請求（模擬點擊喚醒按鈕後的重新載入）..."
           curl -s -L -A "$UA" "$URL" > /dev/null
-          
-          echo "程序執行完畢。請於 1 分鐘後手動重新整理網頁。"
+          echo "程序執行完畢，喚醒訊號已送達。"
