@@ -9,20 +9,10 @@ jobs:
   wake_up:
     runs-on: ubuntu-latest
     steps:
-      - name: 模擬真人訪問並檢查狀態
+      - name: 模擬真人訪問網站
         run: |
-          # 第一次嘗試存取 (這會觸發 Streamlit 的喚醒機制)
-          RESPONSE=$(curl -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-          https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/)
-
-          # 判斷網頁內容是否包含睡眠特徵 (Zzzz)
-          if echo "$RESPONSE" | grep -q "sleep"; then
-            echo "偵測到網站正在睡眠，已發送喚醒訊號，等待 30 秒後進行第二次確認..."
-            sleep 30
-            # 第二次存取，確認是否開始啟動
-            curl -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/ > /dev/null
-            echo "已完成第二次存取。"
-          else
-            echo "網站目前狀態正常，無需喚醒。"
-          fi
+          # 使用 curl 存取網站，並加上 || true 確保不會因為找不到關鍵字而中斷失敗
+          curl -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/ | grep -q "Streamlit" || true
+          
+          echo "喚醒指令已發送。請等待約 1-2 分鐘後重新整理網頁查看結果。"
