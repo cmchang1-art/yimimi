@@ -1,0 +1,17 @@
+name: 每日自動喚醒網站
+on:
+  schedule:
+    # 這裡設定每 4 小時執行一次 (UTC 時間 0, 4, 8, 12, 16, 20)
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # 保留這個，讓你可以手動按按鈕測試
+
+jobs:
+  wake_up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 模擬真人訪問網站(每日自動喚醒網站)
+        run: |
+          # 使用 curl 模擬最新的 Chrome 瀏覽器 Header
+          curl -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/ \
+          | grep -q "Streamlit" && echo "網站目前正常" || echo "嘗試喚醒中..."
