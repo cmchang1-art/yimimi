@@ -1,4 +1,4 @@
-name: 每日自動喚醒網站
+name: 強力自動喚醒 (含自動點擊)
 on:
   schedule:
     - cron: '0 */4 * * *'
@@ -8,18 +8,36 @@ jobs:
   wake_up:
     runs-on: ubuntu-latest
     steps:
-      - name: 強力喚醒程序
+      - uses: actions/checkout@v4
+      - name: 安裝 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 安裝瀏覽器工具
+        run: npm install playwright
+      - name: 執行自動點擊喚醒
         run: |
-          URL="https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/"
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-          
-          echo "執行第一次存取..."
-          curl -s -L -A "$UA" "$URL" > /dev/null || true
-          
-          echo "等待 30 秒熱機..."
-          sleep 30
-          
-          echo "執行第二次存取（模擬點擊按鈕）..."
-          curl -s -L -A "$UA" "$URL" > /dev/null || true
-          
-          echo "程序結束。"
+          npx playwright install chromium
+          cat << 'EOF' > click_button.js
+          const { chromium } = require('playwright');
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            const url = 'https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/';
+            console.log('正在進入網站...');
+            await page.goto(url, { waitUntil: 'networkidle' });
+            
+            // 尋找你提供的按鈕特徵並點擊
+            const wakeupButton = page.locator('button:has-text("Yes, get this app back up!")');
+            if (await wakeupButton.isVisible()) {
+              console.log('偵測到睡眠按鈕，正在執行點擊...');
+              await wakeupButton.click();
+              await page.waitForTimeout(10000); // 點擊後等待 10 秒啟動
+              console.log('點擊完成。');
+            } else {
+              console.log('網站目前似乎是正常的，未發現睡眠按鈕。');
+            }
+            await browser.close();
+          })();
+          EOF
+          node click_button.js
