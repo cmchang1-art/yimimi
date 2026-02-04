@@ -8,20 +8,18 @@ jobs:
   wake_up:
     runs-on: ubuntu-latest
     steps:
-      - name: 模擬真人訪問並自動嘗試喚醒
+      - name: 強力喚醒程序
         run: |
           URL="https://yimimi-rzluehrcrwrjcsys3lm2qg.streamlit.app/"
-          USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           
-          echo "正在嘗試發送喚醒訊號..."
-          # 第一次敲門：這會讓伺服器知道有人來了
-          curl -s -L -A "$USER_AGENT" "$URL" > /dev/null
+          echo "第一步：發送初始存取請求（喚醒伺服器）..."
+          curl -s -L -A "$UA" "$URL" > /dev/null
           
-          echo "已送出請求，模擬按鈕觸發機制。請等待 45 秒熱機..."
-          sleep 45
+          echo "第二步：等待 30 秒讓伺服器熱機啟動..."
+          sleep 30
           
-          # 第二次敲門：這模擬了點擊按鈕後的「重新載入」動作
-          echo "模擬點擊按鈕後的第二次載入..."
-          curl -s -L -A "$USER_AGENT" "$URL" > /dev/null
+          echo "第三步：發送第二次請求（模擬點擊喚醒按鈕後的重新載入）..."
+          curl -s -L -A "$UA" "$URL" > /dev/null
           
-          echo "程序完成。請在 30 秒後手動重新整理你的瀏覽器標籤頁。"
+          echo "程序執行完畢。請於 1 分鐘後手動重新整理網頁。"
